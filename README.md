@@ -148,3 +148,12 @@ and [Troubleshooting](https://learn.microsoft.com/fslogix/troubleshooting-fslogi
 ## License
 
 MIT - see [LICENSE](LICENSE).
+
+---
+
+## v2
+
+An enhanced version, `FSLogix-HealthCheck-v2.ps1`, is in this repo as a reference
+implementation for a native FSLogix health check in Nerdio Manager for Enterprise:
+47 checks, a weighted health score, machine-readable JSON for fleet aggregation, and
+allow-listed non-interactive remediation. See [README-v2.md](README-v2.md).

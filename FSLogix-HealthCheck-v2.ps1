@@ -1,4 +1,4 @@
-#description: FSLogix health check (v2). Scores an FSLogix installation against Microsoft's documented best practice. Produces a weighted health score, HTML report and machine-readable JSON. Read-only by default; -Remediate applies an allow-listed set of safe registry corrections.
+#description: FSLogix health check (v2). Scores an FSLogix installation on a session host against Microsoft's documented best practice. Produces a weighted health score, an HTML report and machine-readable JSON. Strictly read-only - it never writes to the host.
 #execution mode: Individual
 #tags: FSLogix, AVD, Health Check, Profile Container
 
@@ -16,9 +16,15 @@
         source of truth.
       * A weighted health score, so "12 warnings" becomes a number an
         operations dashboard can trend.
-      * Non-interactive by design. Remediation is an explicit switch with an
-        allow-list and -WhatIf support, never a console prompt.
       * No single check can abort the run.
+
+    STRICTLY READ-ONLY. This script never writes to the host. That is a design
+    decision, not a missing feature. Every finding that has a known correction
+    carries a machine-readable `remediation` block describing the change, but
+    applying it is left to the operator or to a management platform. Unattended
+    registry changes across a session host fleet need change control, batching,
+    a rollback path and an audit trail. A community script has none of those,
+    and a half-safe fix engine is worse than an honest report.
 
     Sources (all Microsoft Learn, verified 1 September 2026):
       Prerequisites / antivirus exclusions
@@ -39,7 +45,7 @@
     no Unicode arrows.
 #>
 
-[CmdletBinding(SupportsShouldProcess = $true)]
+[CmdletBinding()]
 param(
     # Directory for the HTML report. A UNC path lets a whole host pool write to one place.
     [string]$ReportPath,
@@ -49,12 +55,6 @@ param(
 
     # Skip the HTML rendering and emit JSON only. Useful for fleet runs.
     [switch]$JsonOnly,
-
-    # Apply the allow-listed registry corrections. Honours -WhatIf.
-    [switch]$Remediate,
-
-    # Restrict remediation to these check IDs. Empty means every allow-listed fix.
-    [string[]]$RemediateOnly = @(),
 
     # Enumerate profile containers on the share and report size against SizeInMBs.
     # Off by default because it walks the share.
@@ -163,8 +163,7 @@ $script:ReasonCodes = @{
 # Result collection
 # ---------------------------------------------------------------------------
 
-$script:Results     = New-Object System.Collections.Generic.List[object]
-$script:FixesApplied = New-Object System.Collections.Generic.List[object]
+$script:Results = New-Object System.Collections.Generic.List[object]
 
 function Add-Check {
     param(
@@ -177,31 +176,29 @@ function Add-Check {
         [string]$Evidence = '',
         [string]$Recommendation = '',
         [string]$Reference = '',
-        # Allow-listed fix descriptor: @{ Path=''; Name=''; Value=''; Type='DWord|String' }
-        [hashtable]$Fix = $null
+        # ADVISORY ONLY. Describes the change that would correct the finding, so
+        # the JSON is machine-readable by whatever applies it. This script never
+        # applies it. Shapes:
+        #   @{ Path=''; Name=''; Value=''; Type='DWord|String' }
+        #   @{ Kind='DefenderExclusions'; Processes=@(); Paths=@() }
+        [hashtable]$Remediation = $null
     )
 
     $obj = [PSCustomObject]@{
-        Id             = $Id
-        Category       = $Category
-        Name           = $Name
-        Status         = $Status
-        Severity       = $Severity
-        Weight         = $script:SeverityWeight[$Severity]
-        Detail         = $Detail
-        Evidence       = $Evidence
-        Recommendation = $Recommendation
-        Reference      = $Reference
-        Fixable        = [bool]$Fix
-        Fix            = $Fix
-        FixApplied     = $false
-        FixError       = ''
+        Id                    = $Id
+        Category              = $Category
+        Name                  = $Name
+        Status                = $Status
+        Severity              = $Severity
+        Weight                = $script:SeverityWeight[$Severity]
+        Detail                = $Detail
+        Evidence              = $Evidence
+        Recommendation        = $Recommendation
+        Reference             = $Reference
+        RemediationAvailable  = [bool]$Remediation
+        Remediation           = $Remediation
     }
     $script:Results.Add($obj) | Out-Null
-
-    if ($Fix -and $Status -ne 'PASS' -and $Remediate) {
-        Invoke-AllowListedFix -Result $obj
-    }
 
     if (-not $Quiet) {
         $colour = 'Gray'
@@ -211,48 +208,8 @@ function Add-Check {
         Write-Host ("[{0,-4}] {1,-9} {2,-16} {3}" -f $Status, $Severity, $Category, $Name) -ForegroundColor $colour
         Write-Host ("         {0}" -f $Detail) -ForegroundColor DarkGray
         if ($Recommendation -and $Status -ne 'PASS') {
-            Write-Host ("         Fix: {0}" -f $Recommendation) -ForegroundColor Cyan
+            Write-Host ("         Recommended: {0}" -f $Recommendation) -ForegroundColor Cyan
         }
-    }
-}
-
-function Invoke-AllowListedFix {
-    param($Result)
-
-    if ($RemediateOnly.Count -gt 0 -and ($RemediateOnly -notcontains $Result.Id)) {
-        return
-    }
-
-    $fix = $Result.Fix
-
-    # Fixes carrying a Kind are not single registry values. They are applied by
-    # their own handler later in the script, so skip them here. Without this
-    # guard the registry handler would run against an empty path.
-    if ($fix.ContainsKey('Kind')) { return }
-
-    $target = "{0}\{1} = {2}" -f $fix.Path, $fix.Name, $fix.Value
-
-    if (-not $PSCmdlet.ShouldProcess($target, "Set FSLogix registry value ($($Result.Id))")) {
-        return
-    }
-
-    try {
-        if (-not (Test-Path $fix.Path)) {
-            New-Item -Path $fix.Path -Force | Out-Null
-        }
-        New-ItemProperty -Path $fix.Path -Name $fix.Name -Value $fix.Value `
-            -PropertyType $fix.Type -Force -ErrorAction Stop | Out-Null
-        $Result.FixApplied = $true
-        $script:FixesApplied.Add([PSCustomObject]@{
-            Id    = $Result.Id
-            Path  = $fix.Path
-            Name  = $fix.Name
-            Value = $fix.Value
-        }) | Out-Null
-        if (-not $Quiet) { Write-Host ("         Applied: {0}" -f $target) -ForegroundColor Green }
-    } catch {
-        $Result.FixError = $_.Exception.Message
-        if (-not $Quiet) { Write-Host ("         Fix failed: {0}" -f $_.Exception.Message) -ForegroundColor Red }
     }
 }
 
@@ -379,7 +336,7 @@ function Test-RecommendedSetting {
         [Parameter(Mandatory = $true)][string]$Why,
         [ValidateSet('DWord', 'String')][string]$Type = 'DWord',
         [switch]$CaseInsensitiveString,
-        [switch]$NoFix,
+        [switch]$NoRemediation,
         [string]$Reference = $DOC_EXAMPLES
     )
 
@@ -405,7 +362,7 @@ function Test-RecommendedSetting {
     }
 
     $fix = $null
-    if (-not $NoFix) {
+    if (-not $NoRemediation) {
         $fix = @{ Path = $Key; Name = $ValueName; Value = $Recommended; Type = $Type }
     }
 
@@ -415,7 +372,7 @@ function Test-RecommendedSetting {
         -Detail "$ValueName is $effective. Microsoft recommends $Recommended. $Why" `
         -Evidence $evidence `
         -Recommendation "Set $ValueName to $Recommended at $Key." `
-        -Reference $Reference -Fix $fix
+        -Reference $Reference -Remediation $fix
 }
 
 # ---------------------------------------------------------------------------
@@ -577,7 +534,7 @@ if ($fslogixInstalled) {
                 -Detail "Enabled is $enabled, not 1. Profile Container is not active on this host, so users are getting local profiles." `
                 -Evidence "$RK_PROFILES\Enabled = $enabled" `
                 -Recommendation 'Set Enabled to 1.' -Reference $DOC_SETTINGS `
-                -Fix @{ Path = $RK_PROFILES; Name = 'Enabled'; Value = 1; Type = 'DWord' }
+                -Remediation @{ Path = $RK_PROFILES; Name = 'Enabled'; Value = 1; Type = 'DWord' }
         }
     }
 
@@ -695,7 +652,7 @@ if ($fslogixInstalled) {
                 -Evidence 'Consider this alongside PreventLoginWithTempProfile. Turning either on is a deliberate policy decision: users are blocked rather than silently degraded.' `
                 -Recommendation 'Set PreventLoginWithFailure to 1 once your service desk is ready for the blocked-sign-in call.' `
                 -Reference $DOC_SETTINGS `
-                -Fix @{ Path = $RK_PROFILES; Name = 'PreventLoginWithFailure'; Value = 1; Type = 'DWord' }
+                -Remediation @{ Path = $RK_PROFILES; Name = 'PreventLoginWithFailure'; Value = 1; Type = 'DWord' }
         }
     }
 
@@ -708,7 +665,7 @@ if ($fslogixInstalled) {
             Add-Check -Id 'CFG-PREVENTTEMP' -Category 'Configuration' -Name 'PreventLoginWithTempProfile' -Status 'WARN' -Severity 'High' `
                 -Detail "Set to $v (Microsoft default). Users land on a Windows temporary profile and lose everything at sign-out, usually without noticing until the next day." `
                 -Recommendation 'Set PreventLoginWithTempProfile to 1.' -Reference $DOC_SETTINGS `
-                -Fix @{ Path = $RK_PROFILES; Name = 'PreventLoginWithTempProfile'; Value = 1; Type = 'DWord' }
+                -Remediation @{ Path = $RK_PROFILES; Name = 'PreventLoginWithTempProfile'; Value = 1; Type = 'DWord' }
         }
     }
 
@@ -721,7 +678,7 @@ if ($fslogixInstalled) {
                 -Detail "SizeInMBs is $v MB. That is small for a profile container, and the ceiling can be raised later but never lowered." `
                 -Evidence "$RK_PROFILES\SizeInMBs = $v ($src)" `
                 -Recommendation 'Raise SizeInMBs to 30000 (30 GB), the Microsoft default.' -Reference $DOC_SETTINGS `
-                -Fix @{ Path = $RK_PROFILES; Name = 'SizeInMBs'; Value = 30000; Type = 'DWord' }
+                -Remediation @{ Path = $RK_PROFILES; Name = 'SizeInMBs'; Value = 30000; Type = 'DWord' }
         } else {
             Add-Check -Id 'CFG-SIZEINMBS' -Category 'Configuration' -Name 'SizeInMBs' -Status 'PASS' -Severity 'Medium' `
                 -Detail "SizeInMBs is $v MB." -Evidence "$RK_PROFILES\SizeInMBs = $v ($src)"
@@ -737,7 +694,7 @@ if ($fslogixInstalled) {
             Add-Check -Id 'CFG-ISDYNAMIC' -Category 'Configuration' -Name 'IsDynamic' -Status 'WARN' -Severity 'Medium' `
                 -Detail "IsDynamic is $v, so every container is fully allocated at SizeInMBs on the share. With a 30 GB ceiling that is 30 GB of storage billed per user from day one." `
                 -Recommendation 'Set IsDynamic to 1 unless a fixed allocation is a deliberate storage decision.' -Reference $DOC_SETTINGS `
-                -Fix @{ Path = $RK_PROFILES; Name = 'IsDynamic'; Value = 1; Type = 'DWord' }
+                -Remediation @{ Path = $RK_PROFILES; Name = 'IsDynamic'; Value = 1; Type = 'DWord' }
         }
     }
 
@@ -765,7 +722,7 @@ if ($fslogixInstalled) {
             Add-Check -Id 'CFG-ROAMIDENTITY' -Category 'Configuration' -Name 'RoamIdentity' -Status 'FAIL' -Severity 'High' `
                 -Detail 'RoamIdentity is 1 on a host that is Entra joined and not domain joined. Identity roaming conflicts with cloud token handling on this join type.' `
                 -Recommendation 'Set RoamIdentity to 0.' -Reference $DOC_SETTINGS `
-                -Fix @{ Path = $RK_PROFILES; Name = 'RoamIdentity'; Value = 0; Type = 'DWord' }
+                -Remediation @{ Path = $RK_PROFILES; Name = 'RoamIdentity'; Value = 0; Type = 'DWord' }
         } else {
             Add-Check -Id 'CFG-ROAMIDENTITY' -Category 'Configuration' -Name 'RoamIdentity' -Status 'WARN' -Severity 'Medium' `
                 -Detail 'RoamIdentity is 1. Confirm this is deliberate.' -Reference $DOC_SETTINGS
@@ -781,7 +738,7 @@ if ($fslogixInstalled) {
             Add-Check -Id 'CFG-ROAMSEARCH' -Category 'Configuration' -Name 'RoamSearch' -Status 'WARN' -Severity 'Low' `
                 -Detail "RoamSearch is $v. On current Windows builds this is unnecessary and adds container size and sign-out time." `
                 -Recommendation 'Set RoamSearch to 0 on supported Windows builds.' -Reference $DOC_SETTINGS `
-                -Fix @{ Path = $RK_PROFILES; Name = 'RoamSearch'; Value = 0; Type = 'DWord' }
+                -Remediation @{ Path = $RK_PROFILES; Name = 'RoamSearch'; Value = 0; Type = 'DWord' }
         }
     }
 
@@ -925,7 +882,7 @@ if ($fslogixInstalled) {
                     -Detail 'Set to 0 (Microsoft default). Users sign in even when NO Cloud Cache provider is reachable. Their work lands only in the local cache, and if no provider recovers before sign-out the sign-out is blocked indefinitely.' `
                     -Recommendation 'Set to 1, and pair it with PreventLoginWithFailure so the user gets a clear message rather than a hang.' `
                     -Reference $DOC_EXAMPLES `
-                    -Fix @{ Path = $RK_PROFILES; Name = 'HealthyProvidersRequiredForRegister'; Value = 1; Type = 'DWord' }
+                    -Remediation @{ Path = $RK_PROFILES; Name = 'HealthyProvidersRequiredForRegister'; Value = 1; Type = 'DWord' }
             }
         }
 
@@ -935,7 +892,7 @@ if ($fslogixInstalled) {
                 Add-Check -Id 'CCD-HEALTHYUNREGISTER' -Category 'Cloud Cache' -Name 'HealthyProvidersRequiredForUnregister' -Status 'FAIL' -Severity 'Critical' `
                     -Detail 'Set to 0. Microsoft explicitly advises against this: CcdUnregisterTimeout and ClearCacheOnForcedUnregister stop working, and session data held only in the local cache can be permanently deleted at sign-out.' `
                     -Recommendation 'Set to 1 or higher.' -Reference $DOC_SETTINGS `
-                    -Fix @{ Path = $RK_PROFILES; Name = 'HealthyProvidersRequiredForUnregister'; Value = 1; Type = 'DWord' }
+                    -Remediation @{ Path = $RK_PROFILES; Name = 'HealthyProvidersRequiredForUnregister'; Value = 1; Type = 'DWord' }
             } else {
                 Add-Check -Id 'CCD-HEALTHYUNREGISTER' -Category 'Cloud Cache' -Name 'HealthyProvidersRequiredForUnregister' -Status 'PASS' -Severity 'Critical' `
                     -Detail "Set to $v. Sign-out waits for a healthy provider before discarding the local cache."
@@ -1057,9 +1014,9 @@ if ($fslogixInstalled) {
             Add-Check -Id 'AV-EXCLUSIONS' -Category 'Antivirus' -Name 'Defender exclusions' -Status $sev -Severity 'Critical' `
                 -Detail "$($allMissing.Count) documented exclusion(s) are missing. Microsoft s own troubleshooting guidance names antivirus scanning as one of the most common causes of container corruption." `
                 -Evidence ("Missing: " + ($allMissing -join '; ')) `
-                -Recommendation 'Add the missing process, driver, folder and share exclusions. Re-run with -Remediate to add them automatically.' `
+                -Recommendation 'Add the missing process, driver, folder and share exclusions to the antivirus configuration. The exact list is in the remediation block of the JSON output.' `
                 -Reference $DOC_PREREQ `
-                -Fix @{ Kind = 'DefenderExclusions'; Processes = ($missingProcesses + $missingDrivers); Paths = ($missingPaths + $missingShares) }
+                -Remediation @{ Kind = 'DefenderExclusions'; Processes = ($missingProcesses + $missingDrivers); Paths = ($missingPaths + $missingShares) }
         }
     }
 
@@ -1515,37 +1472,6 @@ if ($fslogixInstalled) {
 }
 
 # ---------------------------------------------------------------------------
-# Defender exclusion remediation (handled separately: not a single reg value)
-# ---------------------------------------------------------------------------
-
-if ($Remediate) {
-    $avResult = $script:Results | Where-Object { $_.Id -eq 'AV-EXCLUSIONS' -and $_.Fixable -and -not $_.FixApplied } | Select-Object -First 1
-    if ($avResult -and $avResult.Fix.Kind -eq 'DefenderExclusions') {
-        if ($RemediateOnly.Count -eq 0 -or $RemediateOnly -contains 'AV-EXCLUSIONS') {
-            $procList = @($avResult.Fix.Processes)
-            $pathList = @($avResult.Fix.Paths)
-            if ($PSCmdlet.ShouldProcess("Windows Defender", "Add $($procList.Count) process and $($pathList.Count) path exclusions")) {
-                try {
-                    foreach ($p in $procList) { Add-MpPreference -ExclusionProcess $p -ErrorAction Stop }
-                    foreach ($p in $pathList) { Add-MpPreference -ExclusionPath    $p -ErrorAction Stop }
-                    $avResult.FixApplied = $true
-                    $script:FixesApplied.Add([PSCustomObject]@{
-                        Id    = 'AV-EXCLUSIONS'
-                        Path  = 'Windows Defender'
-                        Name  = 'Exclusions'
-                        Value = (($procList + $pathList) -join '; ')
-                    }) | Out-Null
-                    if (-not $Quiet) { Write-Host "         Applied: Defender exclusions" -ForegroundColor Green }
-                } catch {
-                    $avResult.FixError = $_.Exception.Message
-                    if (-not $Quiet) { Write-Host ("         Defender exclusion fix failed: {0}" -f $_.Exception.Message) -ForegroundColor Red }
-                }
-            }
-        }
-    }
-}
-
-# ---------------------------------------------------------------------------
 # Score and summary
 # ---------------------------------------------------------------------------
 
@@ -1613,9 +1539,10 @@ foreach ($r in $script:Results) {
         evidence       = $r.Evidence
         recommendation = $r.Recommendation
         reference      = $r.Reference
-        fixable        = $r.Fixable
-        fixApplied     = $r.FixApplied
-        fixError       = $r.FixError
+        # Advisory. Describes the change that would correct the finding so a
+        # management platform can act on it. This script never applies it.
+        remediationAvailable = $r.RemediationAvailable
+        remediation          = $r.Remediation
     }) | Out-Null
 }
 
@@ -1651,22 +1578,14 @@ $summaryBlock = [ordered]@{
     criticalFails = $criticalFailIds
 }
 
-# .ToArray(), not @(...): under Windows PowerShell 5.1, wrapping a generic
-# List in @() inside an [ordered] hashtable literal throws "Argument types
-# do not match" when the list is empty.
-$remediationBlock = [ordered]@{
-    requested = $Remediate.IsPresent
-    applied   = $script:FixesApplied.ToArray()
-}
-
 $document = [ordered]@{
     schemaVersion = $script:SchemaVersion
     generatedUtc  = $script:StartedUtc.ToString('o')
     durationMs    = [int]((Get-Date).ToUniversalTime() - $script:StartedUtc).TotalMilliseconds
+    readOnly      = $true
     host          = $hostBlock
     fslogix       = $fslogixBlock
     summary       = $summaryBlock
-    remediation   = $remediationBlock
     checks        = $checkArray.ToArray()
 }
 
@@ -1726,7 +1645,6 @@ if (-not $JsonOnly) {
     Add-Line '.ev { color:var(--muted); font-size:12.5px; margin-top:6px; word-break:break-word; }'
     Add-Line '.rec { color:#1565c0; font-size:12.5px; margin-top:6px; }'
     Add-Line '.ref a { color:#1565c0; font-size:12px; }'
-    Add-Line '.applied { color:#2e7d32; font-weight:600; font-size:12.5px; margin-top:6px; }'
     Add-Line 'h2 { font-size:15px; margin:26px 0 10px 0; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }'
     Add-Line '</style>'
     Add-Line '</head>'
@@ -1775,8 +1693,6 @@ if (-not $JsonOnly) {
             Add-Line ('<td>' + (ConvertTo-HtmlSafe $r.Detail))
             if ($r.Evidence)       { Add-Line ('<div class="ev">' + (ConvertTo-HtmlSafe $r.Evidence) + '</div>') }
             if ($r.Recommendation -and $r.Status -ne 'PASS') { Add-Line ('<div class="rec">Recommended: ' + (ConvertTo-HtmlSafe $r.Recommendation) + '</div>') }
-            if ($r.FixApplied)     { Add-Line '<div class="applied">Remediation applied during this run.</div>' }
-            if ($r.FixError)       { Add-Line ('<div class="rec">Remediation failed: ' + (ConvertTo-HtmlSafe $r.FixError) + '</div>') }
             if ($r.Reference)      { Add-Line ('<div class="ref"><a href="' + (ConvertTo-HtmlSafe $r.Reference) + '">Microsoft documentation</a></div>') }
             Add-Line '</td></tr>'
         }
@@ -1787,7 +1703,8 @@ if (-not $JsonOnly) {
     Add-Line '<table><tr><td>'
     Add-Line 'Every rule is drawn from current Microsoft Learn FSLogix documentation: the Prerequisites page for antivirus exclusions, the Configuration Setting Reference for defaults, the Configuration examples page for recommended values, and the Codes page for Status and Reason decoding. '
     Add-Line 'The health score weights each finding by severity: a pass earns full weight, a warning half, a failure none. Informational rows are excluded from the score. '
-    Add-Line 'A pass on this host does not prove the storage back end is correct: share-side antivirus exclusions, share and NTFS permissions for real user accounts, and storage performance are outside what a session host can observe.'
+    Add-Line 'A pass on this host does not prove the storage back end is correct: share-side antivirus exclusions, share and NTFS permissions for real user accounts, and storage performance are outside what a session host can observe. '
+    Add-Line 'This report covers ONE host at one moment. It is strictly read-only and changed nothing. Estate-wide comparison, and checking whether the FSLogix configuration intended by a management platform actually reached the host, are beyond what a single-host script can do.'
     Add-Line '</td></tr></table>'
 
     Add-Line '</div></body></html>'

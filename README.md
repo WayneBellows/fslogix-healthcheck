@@ -16,7 +16,7 @@ a "my profile didn't roam" ticket.
 | Checks | 47 (mode-dependent) | 14 |
 | Health score | Weighted 0-100 with a grade band | None |
 | Output | JSON plus HTML, either can go to a UNC path | HTML |
-| Remediation | `-Remediate`, allow-listed, `-WhatIf` supported, never prompts | `-Fix`, prompts per item, disabled under automation |
+| Writes to the host | **Never. Strictly read-only.** | `-Fix` prompts per item at the console |
 | Docs | **[README-v2.md](README-v2.md)** | This page, below |
 
 v2 is the current version and the one to reach for. v1 stays in the repo because a
@@ -41,10 +41,11 @@ because a host can score well and still be broken for its users right now.
 path, so every host in a pool lands in one place and can be aggregated. Check IDs are
 stable, so findings join across hosts and trend over time.
 
-**Remediation that is safe unattended.** `-Remediate` is explicit and allow-listed,
-filterable with `-RemediateOnly`, and supports `-WhatIf`. It never prompts.
-`DeleteLocalProfileWhenVHDShouldApply` is never applied automatically, because doing so
-permanently deletes a user's local profile.
+**Strictly read-only.** v2 never writes to the host. Unattended registry changes across
+a fleet need change control, batching, a rollback path and an audit trail, and a
+community script has none of those. Every finding with a known correction instead
+carries a machine-readable `remediation` block in the JSON, so whatever does have change
+control can act on it.
 
 **Coverage v1 did not have,** including: Microsoft's full antivirus exclusion list rather
 than a subset; `ObjectSpecific` SID overrides, which mean the machine-level settings are
@@ -61,7 +62,7 @@ and 2 folders against a much longer documented list.
 ```powershell
 .\FSLogix-HealthCheck-v2.ps1                                    # read-only
 .\FSLogix-HealthCheck-v2.ps1 -ReportPath \\fileserver\fslogix-health -Quiet
-.\FSLogix-HealthCheck-v2.ps1 -Remediate -WhatIf                 # preview fixes
+.\FSLogix-HealthCheck-v2.ps1 -JsonOnly -Quiet                   # for a fleet run
 ```
 
 ---

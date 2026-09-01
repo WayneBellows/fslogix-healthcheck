@@ -7,6 +7,9 @@ for Enterprise. It scores an FSLogix installation on a session host against
 Microsoft's documented best practice and emits a weighted health score, an HTML
 report and a machine-readable JSON document.
 
+**It is strictly read-only.** It never writes to the host. See
+[Why there is no remediation](#why-there-is-no-remediation).
+
 v1 (`FSLogix-HealthCheck.ps1`) is a good single-host troubleshooting script and
 stays in this repo. v2 is what a product feature needs: a reviewable rule set,
 a number an operations dashboard can trend, and output a fleet run can aggregate.
@@ -21,7 +24,7 @@ a number an operations dashboard can trend, and output a fleet run can aggregate
 | Result model | PASS/WARN/FAIL/INFO | plus a severity, a stable check ID, evidence, a recommendation, and a documentation link per check |
 | Score | none | weighted 0-100 health score with a grade band |
 | Output | HTML in `C:\ProgramData` | JSON (the source of truth) plus HTML rendered from it; both can be written to a UNC path so a whole host pool lands in one place |
-| Remediation | `Read-Host` prompt per item, disabled under automation | `-Remediate` switch with an allow-list, `-RemediateOnly` filter and full `-WhatIf` support. Never prompts |
+| Remediation | `-Fix` prompts per item at the console | **None. Strictly read-only.** Every fixable finding instead carries a machine-readable `remediation` block describing the change, for a management platform to act on |
 | Error handling | `$ErrorActionPreference = 'Stop'` globally, so one failure lost the whole report | every check is wrapped; a failing check degrades to one INFO row |
 | Object-specific settings | not read | `ObjectSpecific\<SID>` overrides are enumerated and flagged, because machine-level values are not the effective values when they exist |
 | Status / Reason codes | reported raw, undecoded | decoded against Microsoft's published Status and Reason tables |
@@ -123,18 +126,6 @@ JSON only, for a fleet run:
 .\FSLogix-HealthCheck-v2.ps1 -JsonOnly -JsonPath \\fileserver\fslogix-health -Quiet
 ```
 
-Preview what remediation would change, without changing it:
-
-```powershell
-.\FSLogix-HealthCheck-v2.ps1 -Remediate -WhatIf
-```
-
-Apply only two specific fixes:
-
-```powershell
-.\FSLogix-HealthCheck-v2.ps1 -Remediate -RemediateOnly CFG-VOLUMETYPE,CFG-PREVENTTEMP
-```
-
 Include the container size scan (walks the share, so it is off by default):
 
 ```powershell
@@ -148,8 +139,6 @@ Include the container size scan (walks the share, so it is off by default):
 | `-ReportPath` | Directory for the HTML report. Accepts a UNC path. |
 | `-JsonPath` | Directory for the JSON document. Defaults to `-ReportPath`. |
 | `-JsonOnly` | Skip HTML rendering. |
-| `-Remediate` | Apply allow-listed fixes. Supports `-WhatIf` and `-Confirm`. |
-| `-RemediateOnly` | Restrict remediation to the named check IDs. |
 | `-ScanContainers` | Enumerate containers on the share and compare size to `SizeInMBs`. |
 | `-MaxContainersToScan` | Cap on that enumeration. The cap is reported in the finding, never silently applied. |
 | `-MinimumFSLogixVersion` | Version baseline for the agent-version check. |
@@ -157,21 +146,34 @@ Include the container size scan (walks the share, so it is off by default):
 
 ---
 
-## Remediation safety
+## Why there is no remediation
 
-`-Remediate` is off by default and applies only to an explicit allow-list of registry
-values plus the Defender exclusion list. It honours `-WhatIf` and `-Confirm`, it never
-prompts, and every applied change is recorded in `remediation.applied` in the JSON and
-marked on the HTML row.
+v2 never writes to the host. That is a design decision, not a missing feature.
 
-Two things are deliberately never auto-remediated:
+Unattended registry changes across a session host fleet need change control, batching,
+a rollback path and an audit trail. A community script has none of those, and a
+half-safe fix engine is worse than an honest report. Two findings make the point:
 
 - **`DeleteLocalProfileWhenVHDShouldApply`.** Setting this to 1 permanently deletes a
-  user's existing local profile at their next sign-in. It is reported, never applied.
-- **Anything under `ObjectSpecific`.** Those overrides exist because someone made a
-  decision; a health check should surface them, not overwrite them.
+  user's existing local profile at their next sign-in.
+- **Antivirus exclusions.** Adding exclusions changes a host's security posture. That
+  belongs in a change record, not in a script someone downloaded.
 
----
+Instead, every finding with a known correction carries a machine-readable `remediation`
+block in the JSON, so whatever *does* have change control can act on it:
+
+```json
+{
+  "id": "CFG-VOLUMETYPE",
+  "remediationAvailable": true,
+  "remediation": {
+    "Path": "HKLM:\SOFTWARE\FSLogix\Profiles",
+    "Name": "VolumeType",
+    "Value": "VHDX",
+    "Type": "String"
+  }
+}
+```
 
 ## JSON contract
 
@@ -181,19 +183,19 @@ The JSON document is the source of truth. HTML is a rendering of it.
 schemaVersion   "2.0"
 generatedUtc    ISO 8601
 durationMs      int
+readOnly        always true
 host            { computerName, osCaption, osVersion, isMultiSession,
                   isAvdHost, entraJoined, domainJoined, systemDriveFreeGB }
 fslogix         { installed, version, baselineVersion,
                   mode: Standard | CloudCache | Unconfigured, storageRoot }
 summary         { healthScore, grade, pass, warn, fail, info, criticalFails[] }
-remediation     { requested, applied[ { Id, Path, Name, Value } ] }
 checks[]        { id, category, name, status, severity, weight, detail,
-                  evidence, recommendation, reference, fixable,
-                  fixApplied, fixError }
+                  evidence, recommendation, reference,
+                  remediationAvailable, remediation }
 ```
 
 `id` is stable across runs and versions. It is the key to join findings across a host
-pool, trend a single rule over time, or target `-RemediateOnly`.
+pool, or trend a single rule over time.
 
 ---
 
@@ -236,9 +238,9 @@ across four configurations:
 | FSLogix installed, unconfigured | 37 checks, score 64.1, 3 critical failures correctly identified |
 | Standard mode, unreachable share | 41 checks, score 78.6; reachability PASS and write FAIL correctly separated |
 | Cloud Cache, two providers, `HealthyProvidersRequiredForUnregister` deliberately 0 | 47 checks, score 73.1, that setting correctly raised as a critical failure |
-| `-Remediate -RemediateOnly` with two IDs | exactly those two values changed, Defender untouched, `remediation.applied` correct |
+| Read-only proof | registry value names and Defender exclusion count identical before and after the run |
 
-`-Remediate -WhatIf` was confirmed to change nothing.
+The lab host was returned to its original state after every pass.
 
 ---
 

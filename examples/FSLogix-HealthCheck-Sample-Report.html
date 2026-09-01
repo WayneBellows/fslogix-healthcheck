@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FSLogix Health Check - AR-Nerdio-3</title>
+<style>
+body { font-family: Segoe UI, Arial, sans-serif; margin: 24px; background: #f4f6f8; color: #1a1a1a; }
+h1 { font-size: 20px; }
+.meta { color: #555; margin-bottom: 20px; }
+.summary { display: flex; gap: 12px; margin-bottom: 20px; }
+.chip { padding: 6px 14px; border-radius: 6px; font-weight: 600; color: #fff; }
+.chip-pass { background: #2e7d32; }
+.chip-warn { background: #b8860b; }
+.chip-fail { background: #c62828; }
+.chip-info { background: #616161; }
+table { border-collapse: collapse; width: 100%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #e0e0e0; vertical-align: top; }
+th { background: #263238; color: #fff; }
+tr.status-pass { border-left: 4px solid #2e7d32; }
+tr.status-warn { border-left: 4px solid #b8860b; }
+tr.status-fail { border-left: 4px solid #c62828; }
+tr.status-info { border-left: 4px solid #616161; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; color: #fff; font-size: 12px; font-weight: 700; }
+.badge-pass { background: #2e7d32; }
+.badge-warn { background: #b8860b; }
+.badge-fail { background: #c62828; }
+.badge-info { background: #616161; }
+.category { color: #888; font-size: 12px; text-transform: uppercase; }
+.fix { color: #1565c0; font-size: 12px; margin-top: 4px; }
+</style>
+</head>
+<body>
+<h1>FSLogix Health Check - AR-Nerdio-3</h1>
+<div class="meta">Generated 2026-09-01 12:32 | FSLogix version: 3.25.822.19044</div>
+<div class="summary">
+<span class="chip chip-pass">7 Pass</span>
+<span class="chip chip-warn">2 Warn</span>
+<span class="chip chip-fail">3 Fail</span>
+<span class="chip chip-info">3 Info</span>
+</div>
+<table>
+<tr><th>Status</th><th>Category</th><th>Check</th><th>Detail</th></tr>
+<tr class="status-pass">
+<td><span class="badge badge-pass">PASS</span></td>
+<td class="category">Install</td>
+<td>FSLogix installed</td>
+<td>Installed, version 3.25.822.19044. Frxtray.exe is retired (11 Feb 2025); ignore any reference to it in older docs.
+</td>
+</tr>
+<tr class="status-fail">
+<td><span class="badge badge-fail">FAIL</span></td>
+<td class="category">Config</td>
+<td>Profile Container enabled</td>
+<td>Enabled is 0, not 1. Profile Container is not active.
+</td>
+</tr>
+<tr class="status-fail">
+<td><span class="badge badge-fail">FAIL</span></td>
+<td class="category">Config</td>
+<td>Storage location mode</td>
+<td>Neither VHDLocations nor CCDLocations is set. FSLogix has nowhere to store the profile.
+</td>
+</tr>
+<tr class="status-warn">
+<td><span class="badge badge-warn">WARN</span></td>
+<td class="category">Config</td>
+<td>Volume type</td>
+<td>VolumeType is 'vhd'. Microsoft recommends vhdx for corruption resistance and better size handling. This only affects newly created containers, not existing ones.
+<div class="fix">Suggested fix: Set VolumeType to vhdx for future containers.</div>
+</td>
+</tr>
+<tr class="status-pass">
+<td><span class="badge badge-pass">PASS</span></td>
+<td class="category">Config</td>
+<td>Container size ceiling</td>
+<td>SizeInMBs is 30000.
+</td>
+</tr>
+<tr class="status-pass">
+<td><span class="badge badge-pass">PASS</span></td>
+<td class="category">Config</td>
+<td>RoamIdentity setting</td>
+<td>RoamIdentity is 0 (default, recommended).
+</td>
+</tr>
+<tr class="status-pass">
+<td><span class="badge badge-pass">PASS</span></td>
+<td class="category">Config</td>
+<td>Concurrent session profile mode</td>
+<td>ProfileType is 0.
+</td>
+</tr>
+<tr class="status-warn">
+<td><span class="badge badge-warn">WARN</span></td>
+<td class="category">Config</td>
+<td>Local profile fallback protection</td>
+<td>DeleteLocalProfileWhenVHDShouldApply=0. If a local profile already exists for a user, FSLogix will silently use it instead of the VHD, which is a common source of &quot;my changes did not roam&quot; tickets. Not auto-fixed here - deletes a local profile, confirm no one relies on it first.
+</td>
+</tr>
+<tr class="status-fail">
+<td><span class="badge badge-fail">FAIL</span></td>
+<td class="category">AV Exclusions</td>
+<td>Defender process and path exclusions</td>
+<td>Missing exclusions: frxsvc.exe, frxccds.exe, C:\Program Files\FSLogix\Apps\, C:\ProgramData\FSLogix\. Microsoft's own troubleshooting guidance calls missing AV exclusions the leading cause of FSLogix container corruption.
+<div class="fix">Suggested fix: Add the missing process and path exclusions to Windows Defender.</div>
+</td>
+</tr>
+<tr class="status-info">
+<td><span class="badge badge-info">INFO</span></td>
+<td class="category">AV Exclusions</td>
+<td>File server / share side exclusions</td>
+<td>This check only covers AV exclusions on the session host itself. If the profile share is on a Windows File Server, confirm the same VHD(X)/lock/meta file exclusions are also applied on the AV product protecting that server.
+</td>
+</tr>
+<tr class="status-info">
+<td><span class="badge badge-info">INFO</span></td>
+<td class="category">Storage</td>
+<td>Reachability / write test</td>
+<td>Could not parse a UNC server name out of '' - skipping automated reachability/write tests for this entry.
+</td>
+</tr>
+<tr class="status-pass">
+<td><span class="badge badge-pass">PASS</span></td>
+<td class="category">Services</td>
+<td>frxsvc service</td>
+<td>Running.
+</td>
+</tr>
+<tr class="status-pass">
+<td><span class="badge badge-pass">PASS</span></td>
+<td class="category">Services</td>
+<td>Minifilter drivers loaded</td>
+<td>Expected FSLogix minifilters are loaded: frxdrv, frxdrvvt.
+</td>
+</tr>
+<tr class="status-info">
+<td><span class="badge badge-info">INFO</span></td>
+<td class="category">Runtime</td>
+<td>Current user session mount status</td>
+<td>No session registry entry found for SID S-1-5-21-3210198333-1574265050-2611023557-5601. This is expected if the script is not running in the context of a signed-in FSLogix user session (for example, under LocalSystem via a scripted action).
+</td>
+</tr>
+<tr class="status-pass">
+<td><span class="badge badge-pass">PASS</span></td>
+<td class="category">Runtime</td>
+<td>FSLogix event log errors (last 7 days)</td>
+<td>No unfiltered Error-level events in the FSLogix Apps logs.
+</td>
+</tr>
+</table>
+</body>
+</html>

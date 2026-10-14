@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FSLogix Health Check - Win1125H2</title>
+<style>
+:root { --ink:#1a1a1a; --muted:#5f6b7a; --line:#e3e8ee; --bg:#f4f6f8; }
+body { font-family: Segoe UI, Arial, sans-serif; margin:0; padding:24px; background:var(--bg); color:var(--ink); }
+.wrap { max-width:1200px; margin:0 auto; }
+h1 { font-size:22px; margin:0 0 4px 0; }
+.meta { color:var(--muted); font-size:13px; margin-bottom:20px; }
+.top { display:flex; gap:20px; flex-wrap:wrap; align-items:stretch; margin-bottom:20px; }
+.score { background:#fff; border-radius:10px; padding:18px 26px; box-shadow:0 1px 3px rgba(0,0,0,.10); text-align:center; min-width:190px; }
+.score .n { font-size:46px; font-weight:700; line-height:1; }
+.score .g { font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; margin-top:6px; }
+.chips { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+.chip { padding:8px 16px; border-radius:8px; font-weight:600; color:#fff; font-size:14px; }
+.chip-pass { background:#2e7d32; } .chip-warn { background:#b8860b; } .chip-fail { background:#c62828; } .chip-info { background:#616161; }
+.alert { background:#fdecea; border-left:5px solid #c62828; padding:12px 16px; border-radius:6px; margin-bottom:20px; }
+.alert b { color:#c62828; }
+table { border-collapse:collapse; width:100%; background:#fff; border-radius:8px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.10); }
+th, td { text-align:left; padding:11px 13px; border-bottom:1px solid var(--line); vertical-align:top; font-size:14px; }
+th { background:#263238; color:#fff; font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+tr.s-pass { border-left:4px solid #2e7d32; } tr.s-warn { border-left:4px solid #b8860b; }
+tr.s-fail { border-left:4px solid #c62828; } tr.s-info { border-left:4px solid #9aa5b1; }
+.badge { display:inline-block; padding:2px 9px; border-radius:4px; color:#fff; font-size:11px; font-weight:700; }
+.b-pass { background:#2e7d32; } .b-warn { background:#b8860b; } .b-fail { background:#c62828; } .b-info { background:#9aa5b1; }
+.sev { font-size:11px; color:var(--muted); display:block; margin-top:4px; text-transform:uppercase; }
+.cid { font-family:Consolas,monospace; font-size:11px; color:var(--muted); }
+.preview { background:#fff8e1; border-left:4px solid #b8860b; color:#5d4a10; padding:11px 15px; border-radius:0 5px 5px 0; font-size:13px; margin-bottom:20px; }
+.ev { color:var(--muted); font-size:12.5px; margin-top:6px; word-break:break-word; }
+.rec { color:#1565c0; font-size:12.5px; margin-top:6px; }
+.ref a { color:#1565c0; font-size:12px; }
+h2 { font-size:15px; margin:26px 0 10px 0; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+</style>
+</head>
+<body><div class="wrap">
+<h1>FSLogix Health Check - Win1125H2</h1>
+<div class="meta">Generated 2026-09-17 05:08 | FSLogix 3.26.826.17182 | Mode: Standard | Microsoft Windows 11 Enterprise multi-session | Version 0.1.0 (public preview)</div>
+<div class="preview">Public preview. This tool has not yet been validated across a wide range of customer environments. Treat findings as advice to verify, not instructions to apply.</div>
+<div class="top">
+<div class="score"><div class="n" style="color:#558b2f">93.2</div><div class="g">Good</div></div>
+<div class="chips">
+<span class="chip chip-pass">33 Pass</span>
+<span class="chip chip-warn">1 Warn</span>
+<span class="chip chip-fail">1 Fail</span>
+<span class="chip chip-info">6 Info</span>
+</div>
+</div>
+<div class="alert">
+<b>1 critical failure(s).</b> Users on this host are affected now:
+<ul>
+<li>Defender exclusions - 13 documented exclusion(s) are missing. Microsoft''s own troubleshooting guidance names antivirus scanning as one of the most common causes of container corruption.</li>
+</ul></div>
+<h2>Install</h2>
+<table>
+<tr><th style="width:78px">Status</th><th style="width:230px">Check</th><th>Finding</th></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Critical</span></td>
+<td>FSLogix installed<br><span class="cid">INST-PRESENT</span></td>
+<td>FSLogix is installed.
+<div class="ev">Version 3.26.826.17182 at C:\Program Files\FSLogix\Apps\</div>
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Medium</span></td>
+<td>Agent version<br><span class="cid">INST-VERSION</span></td>
+<td>Installed version 3.26.826.17182 meets or exceeds the configured baseline 3.26.126.19110.
+<div class="ref"><a href="https://learn.microsoft.com/fslogix/overview-release-notes">Microsoft documentation</a></div>
+</td></tr>
+</table>
+<h2>Configuration</h2>
+<table>
+<tr><th style="width:78px">Status</th><th style="width:230px">Check</th><th>Finding</th></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Critical</span></td>
+<td>Profile Container enabled<br><span class="cid">CFG-ENABLED</span></td>
+<td>Enabled = 1. Profile Container is active.
+<div class="ev">HKLM:\SOFTWARE\FSLogix\Profiles\Enabled = 1</div>
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">High</span></td>
+<td>Storage location mode<br><span class="cid">CFG-STORAGEMODE</span></td>
+<td>Standard mode with a single VHDLocations path.
+<div class="ev">VHDLocations: \\localhost\FSLogixProfiles</div>
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Medium</span></td>
+<td>VolumeType<br><span class="cid">CFG-VOLUMETYPE</span></td>
+<td>VolumeType is vhdx, which matches Microsoft's recommended value.
+<div class="ev">HKLM:\SOFTWARE\FSLogix\Profiles\VolumeType = vhdx (explicitly set)</div>
+<div class="ref"><a href="https://learn.microsoft.com/fslogix/concepts-configuration-examples">Microsoft documentation</a></div>
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">High</span></td>
+<td>DeleteLocalProfileWhenVHDShouldApply<br><span class="cid">CFG-DELETELOCAL</span></td>
+<td>Set to 1, which is Microsoft's recommended value. A stale local profile cannot silently win over the container.
+<div class="ev">HKLM:\SOFTWARE\FSLogix\Profiles\DeleteLocalProfileWhenVHDShouldApply = 1</div>
+<div class="ref"><a href="https://learn.microsoft.com/fslogix/concepts-configuration-examples">Microsoft documentation</a></div>
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Low</span></td>
+<td>FlipFlopProfileDirectoryName<br><span class="cid">CFG-FLIPFLOP</span></td>
+<td>FlipFlopProfileDirectoryName is 1, which matches Microsoft's recommended value.
+<div class="ev">HKLM:\SOFTWARE\FSLogix\Profiles\FlipFlopProfileDirectoryName = 1 (explicitly set)</div>
+<div class="ref"><a href="https://learn.microsoft.com/fslogix/concepts-configuration-examples">Microsoft documentation</a></div>
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Medium</span></td>
+<td>LockedRetryCount<br><span class="cid">CFG-LOCKEDRETRYCOUNT</span></td>
+<td>LockedRetryCount is 3, which matches Microsoft's recommended value.
+<div class="ev">HKLM:\SOFTWARE\FSLogix\Profiles\LockedRetryCount = 3 (explicitly set)</div>
+<div class="ref"><a href="https://learn.microsoft.com/fslogix/concepts-configuration-examples">Microsoft documentation</a></div>
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Low</span></td>
+<td>LockedRetryInterval<br><span class="cid">CFG-LOCKEDRETRYINTERVAL</span></td>
+<td>LockedRetryInterval is 15, which matches Microsoft's recommended value.
+<div class="ev">HKLM:\SOFTWARE\FSLogix\Profiles\LockedRetryInterval = 15 (explicitly set)</div>
+<div class="ref"><a href="https://learn.microsoft.com/fslogix/concepts-configuration-examples">Microsoft documentation</a></div>
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Medium</span></td>
+<td>ReAttachRetryCount<br><span class="cid">CFG-REATTACHCOUNT</span></td>
+<td>ReAttachRetryCount is 3, which matches Microsoft's recommended value.
+<div class="ev">HKLM:\SOFTWARE\FSLogix\Profiles\ReAttachRetryCount = 3 (explicitly set)</div>
+<div class="ref"><a href="https://learn.microsoft.com/fslogix/concepts-configuration-examples">Microsoft documentation</a></div>
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Low</span></td>
+<td>ReAttachIntervalSeconds<br><span class="cid">CFG-REATTACHINTERVAL</span></td>
+<td>ReAttachIntervalSeconds is 15, which matches Microsoft's recommended value.
+<div class="ev">HKLM:\SOFTWARE\FSLogix\Profiles\ReAttachIntervalSeconds = 15 (explicitly set)</div>
+<div class="ref"><a href="https://learn.microsoft.com/fslogix/concepts-configuration-examples">Microsoft documentation</a></div>
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">High</span></td>
+<td>PreventLoginWithFailure<br><span class="cid">CFG-PREVENTFAILURE</span></td>
+<td>Set to 1. A container that fails to attach stops the sign-in with a clear message instead of silently degrading.
+<div class="ref"><a href="https://learn.microsoft.com/fslogix/reference-configuration-settings">Microsoft documentation</a></div>
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">High</span></td>
+<td>PreventLoginWithTempProfile<br><span class="cid">CFG-PREVENTTEMP</span></td>
+<td>Set to 1. A temporary profile stops the sign-in rather than handing the user a disposable desktop.
+<div class="ref"><a href="https://learn.microsoft.com/fslogix/reference-configuration-settings">Microsoft documentation</a></div>
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Medium</span></td>
+<td>SizeInMBs<br><span class="cid">CFG-SIZEINMBS</span></td>
+<td>SizeInMBs is 30000 MB.
+<div class="ev">HKLM:\SOFTWARE\FSLogix\Profiles\SizeInMBs = 30000 (explicitly set)</div>
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Medium</span></td>
+<td>IsDynamic<br><span class="cid">CFG-ISDYNAMIC</span></td>
+<td>IsDynamic is 1. Containers consume only the space they use, up to SizeInMBs.
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Medium</span></td>
+<td>ProfileType<br><span class="cid">CFG-PROFILETYPE</span></td>
+<td>ProfileType is 0 (normal). Single connection per container, which is the Microsoft default and recommendation.
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Medium</span></td>
+<td>RoamIdentity<br><span class="cid">CFG-ROAMIDENTITY</span></td>
+<td>RoamIdentity is 0, the Microsoft default.
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Low</span></td>
+<td>RoamSearch<br><span class="cid">CFG-ROAMSEARCH</span></td>
+<td>RoamSearch is 0. Microsoft states search roaming is no longer necessary on Windows Server 2019 1809 and later, or Windows 10 and 11 multi-session.
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">High</span></td>
+<td>AccessNetworkAsComputerObject<br><span class="cid">CFG-COMPUTEROBJECT</span></td>
+<td>Set to 0. Containers are accessed with user-level permissions.
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Medium</span></td>
+<td>Object-specific overrides<br><span class="cid">CFG-OBJECTSPECIFIC</span></td>
+<td>No ObjectSpecific overrides. Every check above reflects the effective setting for all users on this host.
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Low</span></td>
+<td>RedirXMLSourceFolder<br><span class="cid">CFG-REDIRXML</span></td>
+<td>No custom redirections.xml configured. Microsoft's advice is that fewer redirections is better.
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Medium</span></td>
+<td>ODFC container<br><span class="cid">CFG-ODFC</span></td>
+<td>ODFC container is not enabled. Profile and Office data share a single container, which is Microsoft's recommended configuration.
+</td></tr>
+</table>
+<h2>Antivirus</h2>
+<table>
+<tr><th style="width:78px">Status</th><th style="width:230px">Check</th><th>Finding</th></tr>
+<tr class="s-info">
+<td><span class="badge b-info">INFO</span><span class="sev">Info</span></td>
+<td>Active antivirus engine<br><span class="cid">AV-ENGINE</span></td>
+<td>Registered antivirus product(s): Windows Defender.
+<div class="ev">Only Windows Defender exposes its exclusion list to this host. Any other engine must be checked in its own console.</div>
+</td></tr>
+<tr class="s-fail">
+<td><span class="badge b-fail">FAIL</span><span class="sev">Critical</span></td>
+<td>Defender exclusions<br><span class="cid">AV-EXCLUSIONS</span></td>
+<td>13 documented exclusion(s) are missing. Microsoft''s own troubleshooting guidance names antivirus scanning as one of the most common causes of container corruption.
+<div class="ev">Missing: frxsvc.exe; frxccds.exe; frxdrv.sys; frxdrvvt.sys; frxccd.sys; C:\Program Files\FSLogix\Apps\; C:\ProgramData\FSLogix\; C:\Users\%username%\AppData\Local\FSLogix\; %TEMP%\*\*.VHD; %TEMP%\*\*.VHDX; %WINDIR%\TEMP\*\*.VHD; %WINDIR%\TEMP\*\*.VHDX; \\localhost\FSLogixProfiles</div>
+<div class="rec">Recommended: Add the missing process, driver, folder and share exclusions to the antivirus configuration. The exact list is in the remediation block of the JSON output.</div>
+<div class="ref"><a href="https://learn.microsoft.com/fslogix/overview-prerequisites#configure-antivirus-file-and-folder-exclusions">Microsoft documentation</a></div>
+</td></tr>
+<tr class="s-info">
+<td><span class="badge b-info">INFO</span><span class="sev">Info</span></td>
+<td>Storage-side exclusions<br><span class="cid">AV-FILESERVER</span></td>
+<td>This check covers the session host only. Where containers sit on a Windows file server, the same VHD(X), .lock, .meta and .metadata exclusions must be applied to the antivirus protecting that server. A host-side pass does not prove the share is safe.
+<div class="ref"><a href="https://learn.microsoft.com/fslogix/overview-prerequisites#configure-antivirus-file-and-folder-exclusions">Microsoft documentation</a></div>
+</td></tr>
+</table>
+<h2>Storage</h2>
+<table>
+<tr><th style="width:78px">Status</th><th style="width:230px">Check</th><th>Finding</th></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Critical</span></td>
+<td>Share reachability (SMB 445)<br><span class="cid">STG-REACH</span></td>
+<td>localhost answers on TCP 445.
+<div class="ev">\\localhost\FSLogixProfiles</div>
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Critical</span></td>
+<td>Share write access<br><span class="cid">STG-WRITE</span></td>
+<td>A test file was created and removed on the container share using the identity this check runs as.
+<div class="ev">Note: a scripted action runs as SYSTEM (the computer account), so this proves computer-account access, not user access.</div>
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">High</span></td>
+<td>Container share free space<br><span class="cid">STG-FREESPACE</span></td>
+<td>14.1 GB free of 16 GB (88.1 per cent). A full container share produces sign-in failures across the whole pool at once.
+<div class="ev">\\localhost\FSLogixProfiles</div>
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Medium</span></td>
+<td>Lock files on the share<br><span class="cid">STG-LOCKFILES</span></td>
+<td>No .lock files found on the container share.
+</td></tr>
+</table>
+<h2>Services</h2>
+<table>
+<tr><th style="width:78px">Status</th><th style="width:230px">Check</th><th>Finding</th></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Critical</span></td>
+<td>frxsvc service<br><span class="cid">SVC-FRXSVC</span></td>
+<td>Running, start mode Auto.
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Critical</span></td>
+<td>Minifilter drivers<br><span class="cid">SVC-MINIFILTERS</span></td>
+<td>The required FSLogix minifilters are loaded.
+<div class="ev">frxdrv=True; frxdrvvt=True; frxccd=True</div>
+</td></tr>
+</table>
+<h2>Groups</h2>
+<table>
+<tr><th style="width:78px">Status</th><th style="width:230px">Check</th><th>Finding</th></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">High</span></td>
+<td>FSLogix local groups<br><span class="cid">GRP-INCLUDEEXCLUDE</span></td>
+<td>Include and exclude group membership matches the shipped defaults.
+<div class="ev">FSLogix ODFC Exclude List: (empty) | FSLogix ODFC Include List: Everyone | FSLogix Profile Exclude List: (empty) | FSLogix Profile Include List: Everyone</div>
+<div class="ref"><a href="https://learn.microsoft.com/fslogix/concepts-include-exclude-groups">Microsoft documentation</a></div>
+</td></tr>
+</table>
+<h2>Runtime</h2>
+<table>
+<tr><th style="width:78px">Status</th><th style="width:230px">Check</th><th>Finding</th></tr>
+<tr class="s-info">
+<td><span class="badge b-info">INFO</span><span class="sev">Info</span></td>
+<td>Session attach status<br><span class="cid">RUN-SESSIONS</span></td>
+<td>No FSLogix session data on this host. Expected when no user has signed in since the last restart.
+<div class="ref"><a href="https://learn.microsoft.com/fslogix/troubleshooting-error-codes">Microsoft documentation</a></div>
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">High</span></td>
+<td>Temporary and orphaned profiles<br><span class="cid">RUN-TEMPPROFILES</span></td>
+<td>No .bak ProfileList keys and no C:\Users\TEMP folder. No sign of a temporary-profile event on this host.
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Medium</span></td>
+<td>Local profiles on a container host<br><span class="cid">RUN-LOCALPROFILES</span></td>
+<td>No unexpected local profile folders under C:\Users.
+</td></tr>
+<tr class="s-warn">
+<td><span class="badge b-warn">WARN</span><span class="sev">Medium</span></td>
+<td>FSLogix event log errors (7 days)<br><span class="cid">RUN-EVENTLOG</span></td>
+<td>2 Error-level event(s) in the last 7 days, grouped as: Event 26 x2.
+<div class="ev">[2026-09-17 05:07] 26: Failed to get computer's group SIDs | [2026-09-17 05:07] 26: Querying computer's fully qualified distinguished name failed. (Configuration information could not be read from the domain controller, either because the machine is unavailable, or access has been denied.)</div>
+<div class="rec">Recommended: Review the highest-count event ID first; a repeating error on a session host is usually one root cause, not many.</div>
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Medium</span></td>
+<td>FSLogix text logging<br><span class="cid">RUN-LOGGING</span></td>
+<td>FSLogix text logging is enabled.
+<div class="ev">LogDir: C:\ProgramData\FSLogix\Logs</div>
+</td></tr>
+</table>
+<h2>Host</h2>
+<table>
+<tr><th style="width:78px">Status</th><th style="width:230px">Check</th><th>Finding</th></tr>
+<tr class="s-info">
+<td><span class="badge b-info">INFO</span><span class="sev">Info</span></td>
+<td>Operating system<br><span class="cid">HOST-OS</span></td>
+<td>Microsoft Windows 11 Enterprise multi-session build 10.0.26200.
+<div class="ev">Multi-session: True. System drive free: 107.6 GB.</div>
+</td></tr>
+<tr class="s-info">
+<td><span class="badge b-info">INFO</span><span class="sev">Info</span></td>
+<td>Device join state<br><span class="cid">HOST-JOIN</span></td>
+<td>Workgroup (neither domain nor Entra joined). Join state changes which storage authentication path applies.
+<div class="ev">AzureAdJoined=False; DomainJoined=False</div>
+</td></tr>
+<tr class="s-info">
+<td><span class="badge b-info">INFO</span><span class="sev">Info</span></td>
+<td>AVD agent present<br><span class="cid">HOST-AVD</span></td>
+<td>No AVD agent found. Treating this as RDS or a standalone multi-user host.
+</td></tr>
+<tr class="s-pass">
+<td><span class="badge b-pass">PASS</span><span class="sev">Medium</span></td>
+<td>System drive free space<br><span class="cid">HOST-SYSFREE</span></td>
+<td>107.6 GB free on C:.
+</td></tr>
+</table>
+<h2>About this report</h2>
+<table><tr><td>
+Every rule is drawn from current Microsoft Learn FSLogix documentation: the Prerequisites page for antivirus exclusions, the Configuration Setting Reference for defaults, the Configuration examples page for recommended values, and the Codes page for Status and Reason decoding. 
+The health score weights each finding by severity: a pass earns full weight, a warning half, a failure none. Informational rows are excluded from the score. 
+A pass on this host does not prove the storage back end is correct: share-side antivirus exclusions, share and NTFS permissions for real user accounts, and storage performance are outside what a session host can observe. 
+This report covers ONE host at one moment. It is strictly read-only and changed nothing. Estate-wide comparison, and checking whether the FSLogix configuration intended by a management platform actually reached the host, are beyond what a single-host script can do.
+</td></tr></table>
+</div></body></html>

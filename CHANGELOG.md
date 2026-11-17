@@ -28,6 +28,17 @@ existing field changed, so a 1.0 consumer keeps working.
   that differ between hosts; findings across the pool; missing hosts; unreadable files.
   Runs no host checks.
 
+### Security
+
+- Storage account keys and SAS signatures (`AccountKey=`, `SharedAccessSignature=`,
+  `sig=`) in Cloud Cache connection strings are replaced by a short SHA-256 fingerprint in
+  the `configuration` section and in the `CCDLocations` evidence. The JSON and HTML never
+  hold the secret; drift can still tell that two hosts use different keys. The evidence
+  redaction also fixes 0.1.0, which printed `CCDLocations` as it was.
+- The pool summary treats result files as untrusted input: every value is HTML-escaped, a
+  `generatedUtc` later than the file's own write time is capped to that time, and a result
+  whose host differs from its file name is flagged at the top of the page.
+
 ### Changed
 
 - `-MinimumFSLogixVersion` default raised to 3.26.826.17182 (FSLogix 26.08, published

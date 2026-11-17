@@ -348,6 +348,28 @@ function ConvertTo-FlatString {
     return [string]$Value
 }
 
+function Protect-SecretText {
+    # A Cloud Cache connection string can hold a storage account key or a SAS
+    # token instead of an frx credential reference. Replace each secret with a
+    # short SHA-256 fingerprint: the JSON and HTML never hold the secret, and
+    # drift can still tell that two hosts use different keys.
+    param([string]$Text)
+    if (-not $Text) { return $Text }
+    $pattern = '(?i)\b(AccountKey|SharedAccessSignature|sig)=([^;"|&,\s]+)'
+    $evaluator = [System.Text.RegularExpressions.MatchEvaluator] {
+        param($m)
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $bytes = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($m.Groups[2].Value))
+        } finally {
+            $sha.Dispose()
+        }
+        $hex = ($bytes[0..3] | ForEach-Object { $_.ToString('x2') }) -join ''
+        return $m.Groups[1].Value + '=<redacted:' + $hex + '>'
+    }
+    return [regex]::Replace($Text, $pattern, $evaluator)
+}
+
 function ConvertTo-HtmlSafe {
     param([string]$Text)
     if ($null -eq $Text) { return '' }
@@ -481,7 +503,7 @@ function Get-ConfigSnapshot {
             } else {
                 $s = ConvertTo-FlatString $v
             }
-            $flat[$label + '\' + $p.Name] = $s
+            $flat[$label + '\' + $p.Name] = Protect-SecretText $s
         }
     }
     $snap = [ordered]@{}
@@ -576,10 +598,18 @@ if ($SummariseFolder) {
             if ($null -eq $doc -or $null -eq $doc.host -or -not $doc.host.computerName) {
                 throw 'Not an FSLogix Health Check result: no host.computerName.'
             }
+            # The file content is self-reported. Never let a result claim to be
+            # newer than the file itself: a future generatedUtc would otherwise
+            # hide every genuine later result for that host.
             $when = ConvertTo-UtcDate -Value $doc.generatedUtc -Fallback $f.LastWriteTimeUtc
-            $key  = ([string]$doc.host.computerName).ToUpper()
+            if ($when -gt $f.LastWriteTimeUtc) { $when = $f.LastWriteTimeUtc }
+            $hostName = [string]$doc.host.computerName
+            $key  = $hostName.ToUpper()
+            # This script names each file FSLogix-HealthCheck-<host>-<time>.json.
+            # A file whose name and content disagree is shown, not trusted silently.
+            $nameMismatch = -not $f.Name.ToUpper().StartsWith('FSLOGIX-HEALTHCHECK-' + $key + '-')
             if ($latest.ContainsKey($key) -and $latest[$key].When -ge $when) { continue }
-            $latest[$key] = [pscustomobject]@{ Name = [string]$doc.host.computerName; When = $when; File = $f.Name; Doc = $doc }
+            $latest[$key] = [pscustomobject]@{ Name = $hostName; When = $when; File = $f.Name; Doc = $doc; NameMismatch = $nameMismatch }
         } catch {
             $unreadable.Add([pscustomobject]@{ file = $f.Name; error = $_.Exception.Message }) | Out-Null
         }
@@ -626,6 +656,7 @@ if ($SummariseFolder) {
             criticalFails    = $crit
             hasConfiguration = ($null -ne $d.PSObject.Properties['configuration'])
             file             = $h.File
+            fileNameMismatch = [bool]$h.NameMismatch
         }) | Out-Null
     }
 
@@ -758,6 +789,12 @@ if ($SummariseFolder) {
             foreach ($u in $unreadable) { Add-SumLine ('<li><span class="cid">' + (ConvertTo-HtmlSafe $u.file) + '</span> - ' + (ConvertTo-HtmlSafe $u.error) + '</li>') }
             Add-SumLine '</ul></div>'
         }
+        $mismatchRows = @($hostRows | Where-Object { $_.fileNameMismatch })
+        if ($mismatchRows.Count -gt 0) {
+            Add-SumLine ('<div class="alert"><b>' + $mismatchRows.Count + ' result(s) name a different host than their file name.</b> Check who wrote these files before you trust them:<ul>')
+            foreach ($m in $mismatchRows) { Add-SumLine ('<li><span class="cid">' + (ConvertTo-HtmlSafe $m.file) + '</span> says host ' + (ConvertTo-HtmlSafe $m.host) + '</li>') }
+            Add-SumLine '</ul></div>'
+        }
         if ($noConfigHosts.Count -gt 0) {
             Add-SumLine ('<div class="note"><b>' + $noConfigHosts.Count + ' host(s) have no configuration section</b> (result written before 0.2.0), so they are not in the settings comparison: ' + (ConvertTo-HtmlSafe ($noConfigHosts -join ', ')) + '.</div>')
         }
@@ -776,9 +813,9 @@ if ($SummariseFolder) {
                 $critCell = '-'
                 if ($r.criticalFails.Count -gt 0) { $critCell = '<span class="bad cid">' + (ConvertTo-HtmlSafe ($r.criticalFails -join ', ')) + '</span>' }
                 Add-SumLine ('<tr><td>' + (ConvertTo-HtmlSafe $r.host) + '<div class="muted">' + (ConvertTo-HtmlSafe $r.storageRoot) + '</div></td>' +
-                             '<td>' + $r.healthScore + '<div class="muted">' + (ConvertTo-HtmlSafe $r.grade) + '</div></td>' +
+                             '<td>' + (ConvertTo-HtmlSafe ([string]$r.healthScore)) + '<div class="muted">' + (ConvertTo-HtmlSafe $r.grade) + '</div></td>' +
                              '<td>' + $verCell + '</td><td>' + (ConvertTo-HtmlSafe $r.mode) + '</td>' +
-                             '<td>' + $r.fail + ' / ' + $r.warn + '</td><td>' + $critCell + '</td><td>' + $ageCell + '</td></tr>')
+                             '<td>' + (ConvertTo-HtmlSafe ([string]$r.fail)) + ' / ' + (ConvertTo-HtmlSafe ([string]$r.warn)) + '</td><td>' + $critCell + '</td><td>' + $ageCell + '</td></tr>')
             }
             Add-SumLine '</table>'
         }
@@ -815,7 +852,8 @@ if ($SummariseFolder) {
         Add-SumLine '<h2>About this summary</h2>'
         Add-SumLine '<table><tr><td>This page is built only from the JSON results in the folder. It uses the newest result for each host and ignores older ones. It ran no checks and changed nothing. '
         Add-SumLine 'A setting shown as (not set) is not in the registry on that host, so FSLogix uses its default there. That can be the same as an explicit value on another host. '
-        Add-SumLine 'Each host result is one moment in time. Check the result age before you act on a figure.</td></tr></table>'
+        Add-SumLine 'Each host result is one moment in time. Check the result age before you act on a figure. '
+        Add-SumLine 'The results are only as trustworthy as the folder: anyone who can write to it can write a result. Give write access to the session hosts and admins only.</td></tr></table>'
         Add-SumLine '</div></body></html>'
 
         try {
@@ -1030,7 +1068,7 @@ if ($fslogixInstalled) {
         if ($vhdLocations -and $ccdLocations) {
             Add-Check -Id 'CFG-STORAGEMODE' -Category 'Configuration' -Name 'Storage location mode' -Status 'FAIL' -Severity 'Critical' `
                 -Detail 'Both VHDLocations and CCDLocations are set. Microsoft states these must not both be present. FSLogix behaviour is undefined.' `
-                -Evidence "VHDLocations: $vhdLocations | CCDLocations: $ccdLocations" `
+                -Evidence ("VHDLocations: $vhdLocations | CCDLocations: " + (Protect-SecretText $ccdLocations)) `
                 -Recommendation 'Remove whichever value does not match the intended mode.' -Reference $DOC_SETTINGS
         } elseif (-not $vhdLocations -and -not $ccdLocations) {
             Add-Check -Id 'CFG-STORAGEMODE' -Category 'Configuration' -Name 'Storage location mode' -Status 'FAIL' -Severity 'Critical' `
@@ -1045,7 +1083,7 @@ if ($fslogixInstalled) {
                 $msg = "Cloud Cache mode with only $providerCount storage provider. Cloud Cache exists to replicate across providers; a single provider adds the local-cache complexity without the resilience it is there to buy."
             }
             Add-Check -Id 'CFG-STORAGEMODE' -Category 'Configuration' -Name 'Storage location mode' -Status $sev -Severity 'High' `
-                -Detail $msg -Evidence "CCDLocations: $ccdLocations" -Reference $DOC_EXAMPLES
+                -Detail $msg -Evidence ("CCDLocations: " + (Protect-SecretText $ccdLocations)) -Reference $DOC_EXAMPLES
         } else {
             $pathCount = @($vhdLocations -split ';' | Where-Object { $_ }).Count
             if ($pathCount -gt 1) {

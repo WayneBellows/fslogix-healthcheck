@@ -560,6 +560,9 @@ function Compare-ConfigTable {
         $cShow = $notSet
         if ($null -ne $r) { $rShow = $r }
         if ($null -ne $c) { $cShow = $c }
+        # An empty value is set, but reads as a blank. Say so.
+        if ($rShow -eq '') { $rShow = '(empty)' }
+        if ($cShow -eq '') { $cShow = '(empty)' }
         [pscustomobject]@{ setting = $n; baseline = $rShow; current = $cShow }
     }
 }
@@ -678,6 +681,7 @@ if ($SummariseFolder) {
         foreach ($h in $configHosts) {
             $v = '(not set)'
             if ($tables[$h.Name].ContainsKey($n)) { $v = $tables[$h.Name][$n] }
+            if ($v -eq '') { $v = '(empty)' }
             $gk = $v.ToLower()
             if (-not $groups.Contains($gk)) {
                 $groups[$gk] = [pscustomobject]@{ value = $v; hosts = (New-Object System.Collections.Generic.List[string]) }

@@ -46,7 +46,7 @@
       Release notes
         https://learn.microsoft.com/fslogix/overview-release-notes
 
-    PUBLIC PREVIEW (0.1.0). This has been tested on a real AVD session host
+    PUBLIC PREVIEW (0.2.0). This has been tested on a real AVD session host
     across several configurations, but NOT yet across a range of customer
     environments. Findings are advice to verify, not instructions to apply.
     The JSON schema may change before 1.0.
@@ -82,8 +82,24 @@ param(
     [int]$ShareScanDepth = 2,
 
     # Minimum acceptable FSLogix version. Update this as Microsoft ships releases.
-    # 3.26.126.19110 is FSLogix 26.01 CU1, published 10 February 2026.
-    [string]$MinimumFSLogixVersion = '3.26.126.19110',
+    # 3.26.826.17182 is FSLogix 26.08, published 31 August 2026.
+    [string]$MinimumFSLogixVersion = '3.26.826.17182',
+
+    # Drift check. Path to a JSON result written by this script (0.2.0 or
+    # later) on a known-good reference host. The FSLogix registry
+    # configuration on this host is compared value by value against it.
+    # Read-only: the baseline is only read, nothing is applied.
+    [string]$BaselinePath,
+
+    # Fleet summary mode. Path to a folder of JSON results from many hosts
+    # (for example the -ReportPath share). Runs NO host checks: it reads the
+    # newest result per host and writes one pool-level HTML and JSON summary
+    # to -ReportPath (default: the same folder).
+    [string]$SummariseFolder,
+
+    # Fleet summary mode only. Host names that should have a result in the
+    # folder. Any that do not are listed as missing.
+    [string[]]$ExpectedHosts,
 
     # Suppress the console table. The JSON and HTML are still produced.
     [switch]$Quiet
@@ -94,8 +110,8 @@ param(
 $ErrorActionPreference = 'Continue'
 $ProgressPreference    = 'SilentlyContinue'
 
-$script:ToolVersion   = '0.1.0'
-$script:SchemaVersion = '1.0'
+$script:ToolVersion   = '0.2.0'
+$script:SchemaVersion = '1.1'
 $script:StartedUtc    = (Get-Date).ToUniversalTime()
 
 # ---------------------------------------------------------------------------
@@ -139,6 +155,9 @@ $Thresholds = @{
 
     # Storage reachability probe.
     TcpProbeTimeoutMs        = 5000
+
+    # Fleet summary: a host result older than this is flagged as stale.
+    SummaryStaleAfterDays    = 7
 }
 
 # ---------------------------------------------------------------------------
@@ -329,6 +348,28 @@ function ConvertTo-FlatString {
     return [string]$Value
 }
 
+function Protect-SecretText {
+    # A Cloud Cache connection string can hold a storage account key or a SAS
+    # token instead of an frx credential reference. Replace each secret with a
+    # short SHA-256 fingerprint: the JSON and HTML never hold the secret, and
+    # drift can still tell that two hosts use different keys.
+    param([string]$Text)
+    if (-not $Text) { return $Text }
+    $pattern = '(?i)\b(AccountKey|SharedAccessSignature|sig)=([^;"|&,\s]+)'
+    $evaluator = [System.Text.RegularExpressions.MatchEvaluator] {
+        param($m)
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $bytes = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($m.Groups[2].Value))
+        } finally {
+            $sha.Dispose()
+        }
+        $hex = ($bytes[0..3] | ForEach-Object { $_.ToString('x2') }) -join ''
+        return $m.Groups[1].Value + '=<redacted:' + $hex + '>'
+    }
+    return [regex]::Replace($Text, $pattern, $evaluator)
+}
+
 function ConvertTo-HtmlSafe {
     param([string]$Text)
     if ($null -eq $Text) { return '' }
@@ -435,6 +476,402 @@ function Test-RecommendedSetting {
         -Evidence $evidence `
         -Recommendation "Set $ValueName to $Recommended at $Key." `
         -Reference $Reference -Remediation $fix
+}
+
+# ---------------------------------------------------------------------------
+# Configuration snapshot, drift and fleet helpers
+# ---------------------------------------------------------------------------
+
+function Get-ConfigSnapshot {
+    # Every value under the FSLogix keys this script reads, flattened to
+    # "Key\ValueName" = string and sorted by name. The order inside a
+    # multi-string value is kept, because the order of VHDLocations and
+    # CCDLocations changes how FSLogix behaves.
+    $skip = @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider')
+    $keys = [ordered]@{ 'Profiles' = $RK_PROFILES; 'ODFC' = $RK_ODFC; 'Apps' = $RK_APPS }
+    $flat = @{}
+    foreach ($label in $keys.Keys) {
+        $path = $keys[$label]
+        if (-not (Test-Path $path)) { continue }
+        $item = Get-ItemProperty -Path $path -ErrorAction SilentlyContinue
+        if ($null -eq $item) { continue }
+        foreach ($p in $item.PSObject.Properties) {
+            if ($skip -contains $p.Name) { continue }
+            $v = $p.Value
+            if ($v -is [byte[]]) {
+                $s = ($v | ForEach-Object { $_.ToString('x2') }) -join ''
+            } else {
+                $s = ConvertTo-FlatString $v
+            }
+            $flat[$label + '\' + $p.Name] = Protect-SecretText $s
+        }
+    }
+    $snap = [ordered]@{}
+    foreach ($k in ($flat.Keys | Sort-Object)) { $snap[$k] = $flat[$k] }
+    return $snap
+}
+
+function Read-ResultJson {
+    # ReadAllText honours a UTF-8 BOM if one is present, and works the same
+    # on a local path and a UNC path.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $text = [System.IO.File]::ReadAllText($Path)
+    return ($text | ConvertFrom-Json)
+}
+
+function ConvertTo-ConfigTable {
+    # The configuration section of a result JSON, as a case-insensitive
+    # hashtable of setting -> string.
+    param($Section)
+    $t = @{}
+    if ($null -eq $Section) { return $t }
+    foreach ($p in $Section.PSObject.Properties) { $t[$p.Name] = [string]$p.Value }
+    return $t
+}
+
+function ConvertTo-UtcDate {
+    # Windows PowerShell 5.1 ConvertFrom-Json leaves ISO 8601 dates as
+    # strings; PowerShell 7 turns them into [datetime]. Accept both.
+    param($Value, [datetime]$Fallback)
+    if ($Value -is [datetime]) { return $Value.ToUniversalTime() }
+    try {
+        $styles = [System.Globalization.DateTimeStyles]::RoundtripKind
+        return ([datetime]::Parse([string]$Value, [System.Globalization.CultureInfo]::InvariantCulture, $styles)).ToUniversalTime()
+    } catch {
+        return $Fallback
+    }
+}
+
+function Compare-ConfigTable {
+    # Differences between two configuration tables. Comparison is
+    # case-insensitive, as registry names and Windows paths are. A value set
+    # on one side only is a difference: on the other side FSLogix uses its
+    # default, which may or may not be the same thing.
+    param([hashtable]$Reference, [hashtable]$Current)
+    $notSet = '(not set)'
+    $names = @(@($Reference.Keys) + @($Current.Keys) | Sort-Object -Unique)
+    foreach ($n in $names) {
+        $r = $null
+        $c = $null
+        if ($Reference.ContainsKey($n)) { $r = $Reference[$n] }
+        if ($Current.ContainsKey($n))   { $c = $Current[$n] }
+        if ($null -ne $r -and $null -ne $c -and $r -eq $c) { continue }
+        $rShow = $notSet
+        $cShow = $notSet
+        if ($null -ne $r) { $rShow = $r }
+        if ($null -ne $c) { $cShow = $c }
+        # An empty value is set, but reads as a blank. Say so.
+        if ($rShow -eq '') { $rShow = '(empty)' }
+        if ($cShow -eq '') { $cShow = '(empty)' }
+        [pscustomobject]@{ setting = $n; baseline = $rShow; current = $cShow }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Fleet summary mode (-SummariseFolder)
+#
+# Runs NO host checks. Reads the newest result per host from a folder of JSON
+# results and writes one pool-level summary. Read-only towards every host;
+# the only files written are the two summary files.
+# ---------------------------------------------------------------------------
+
+if ($SummariseFolder) {
+    $sumStamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $nowUtc   = (Get-Date).ToUniversalTime()
+    $outDir   = $SummariseFolder
+    if ($ReportPath) { $outDir = $ReportPath }
+
+    if (-not (Test-Path -LiteralPath $SummariseFolder -PathType Container)) {
+        Write-Error "SummariseFolder was not found or is not a folder: $SummariseFolder"
+        exit 1
+    }
+    try {
+        if (-not (Test-Path -LiteralPath $outDir)) { New-Item -Path $outDir -ItemType Directory -Force | Out-Null }
+    } catch {
+        Write-Warning "Could not create output directory $outDir : $($_.Exception.Message)"
+    }
+
+    # Newest result per host. Older results for the same host are ignored.
+    $files = @(Get-ChildItem -LiteralPath $SummariseFolder -Filter 'FSLogix-HealthCheck-*.json' -File -ErrorAction SilentlyContinue)
+    $latest     = @{}
+    $unreadable = New-Object System.Collections.Generic.List[object]
+    foreach ($f in $files) {
+        try {
+            $doc = Read-ResultJson -Path $f.FullName
+            if ($null -eq $doc -or $null -eq $doc.host -or -not $doc.host.computerName) {
+                throw 'Not an FSLogix Health Check result: no host.computerName.'
+            }
+            # The file content is self-reported. Never let a result claim to be
+            # newer than the file itself: a future generatedUtc would otherwise
+            # hide every genuine later result for that host.
+            $when = ConvertTo-UtcDate -Value $doc.generatedUtc -Fallback $f.LastWriteTimeUtc
+            if ($when -gt $f.LastWriteTimeUtc) { $when = $f.LastWriteTimeUtc }
+            $hostName = [string]$doc.host.computerName
+            $key  = $hostName.ToUpper()
+            # This script names each file FSLogix-HealthCheck-<host>-<time>.json.
+            # A file whose name and content disagree is shown, not trusted silently.
+            $nameMismatch = -not $f.Name.ToUpper().StartsWith('FSLOGIX-HEALTHCHECK-' + $key + '-')
+            if ($latest.ContainsKey($key) -and $latest[$key].When -ge $when) { continue }
+            $latest[$key] = [pscustomobject]@{ Name = $hostName; When = $when; File = $f.Name; Doc = $doc; NameMismatch = $nameMismatch }
+        } catch {
+            $unreadable.Add([pscustomobject]@{ file = $f.Name; error = $_.Exception.Message }) | Out-Null
+        }
+    }
+    $hostsFound = @($latest.Values | Sort-Object Name)
+
+    # Hosts that should have reported. Accept a comma-separated string too,
+    # because some automation passes one string rather than an array.
+    $missingHosts = New-Object System.Collections.Generic.List[string]
+    foreach ($raw in @($ExpectedHosts)) {
+        if (-not $raw) { continue }
+        foreach ($e in ($raw -split ',')) {
+            $e = $e.Trim()
+            if ($e -and -not $latest.ContainsKey($e.ToUpper()) -and -not $missingHosts.Contains($e)) { $missingHosts.Add($e) | Out-Null }
+        }
+    }
+
+    # One row per host.
+    $hostRows = New-Object System.Collections.Generic.List[object]
+    foreach ($h in $hostsFound) {
+        $d = $h.Doc
+        $ver = [string]$d.fslogix.version
+        $below = $false
+        if ($d.fslogix.installed -and $ver -and $ver -ne 'unknown') {
+            $below = ((Compare-Version $ver $MinimumFSLogixVersion) -lt 0)
+        }
+        $ageDays = [math]::Round(($nowUtc - $h.When).TotalDays, 1)
+        $crit = @($d.summary.criticalFails | Where-Object { $_ })
+        $hostRows.Add([pscustomobject]@{
+            host             = $h.Name
+            generatedUtc     = $h.When.ToString('o')
+            ageDays          = $ageDays
+            stale            = ($ageDays -gt $Thresholds.SummaryStaleAfterDays)
+            toolVersion      = [string]$d.toolVersion
+            fslogixInstalled = [bool]$d.fslogix.installed
+            fslogixVersion   = $ver
+            belowBaseline    = $below
+            mode             = [string]$d.fslogix.mode
+            storageRoot      = [string]$d.fslogix.storageRoot
+            healthScore      = $d.summary.healthScore
+            grade            = [string]$d.summary.grade
+            fail             = $d.summary.fail
+            warn             = $d.summary.warn
+            criticalFails    = $crit
+            hasConfiguration = ($null -ne $d.PSObject.Properties['configuration'])
+            file             = $h.File
+            fileNameMismatch = [bool]$h.NameMismatch
+        }) | Out-Null
+    }
+
+    # Settings whose value is not the same on every host that recorded a
+    # configuration section. A host with no value uses the FSLogix default.
+    $configHosts = @($hostsFound | Where-Object { $_.Doc.PSObject.Properties['configuration'] })
+    $noConfigHosts = @($hostsFound | Where-Object { -not $_.Doc.PSObject.Properties['configuration'] } | ForEach-Object { $_.Name })
+    $tables = @{}
+    $allNames = @()
+    foreach ($h in $configHosts) {
+        $t = ConvertTo-ConfigTable $h.Doc.configuration
+        $tables[$h.Name] = $t
+        $allNames += @($t.Keys)
+    }
+    $allNames = @($allNames | Sort-Object -Unique)
+    $spread = New-Object System.Collections.Generic.List[object]
+    foreach ($n in $allNames) {
+        $groups = [ordered]@{}
+        foreach ($h in $configHosts) {
+            $v = '(not set)'
+            if ($tables[$h.Name].ContainsKey($n)) { $v = $tables[$h.Name][$n] }
+            if ($v -eq '') { $v = '(empty)' }
+            $gk = $v.ToLower()
+            if (-not $groups.Contains($gk)) {
+                $groups[$gk] = [pscustomobject]@{ value = $v; hosts = (New-Object System.Collections.Generic.List[string]) }
+            }
+            $groups[$gk].hosts.Add($h.Name) | Out-Null
+        }
+        if ($groups.Count -gt 1) {
+            $vals = @($groups.Values | Sort-Object { $_.hosts.Count } -Descending | ForEach-Object {
+                [pscustomobject]@{ value = $_.value; hostCount = $_.hosts.Count; hosts = $_.hosts.ToArray() }
+            })
+            $spread.Add([pscustomobject]@{ setting = $n; values = $vals }) | Out-Null
+        }
+    }
+
+    # Findings that fail or warn on at least one host, most widespread first.
+    $findings = @{}
+    foreach ($h in $hostsFound) {
+        foreach ($c in @($h.Doc.checks)) {
+            if ($null -eq $c) { continue }
+            if ($c.status -ne 'FAIL' -and $c.status -ne 'WARN') { continue }
+            if (-not $findings.ContainsKey($c.id)) {
+                $findings[$c.id] = [pscustomobject]@{ id = [string]$c.id; name = [string]$c.name; severity = [string]$c.severity; failHosts = 0; warnHosts = 0 }
+            }
+            if ($c.status -eq 'FAIL') { $findings[$c.id].failHosts++ } else { $findings[$c.id].warnHosts++ }
+        }
+    }
+    $commonFindings = @($findings.Values | Sort-Object @{ Expression = 'failHosts'; Descending = $true }, @{ Expression = 'warnHosts'; Descending = $true }, id)
+
+    $belowCount = @($hostRows | Where-Object { $_.belowBaseline }).Count
+    $staleCount = @($hostRows | Where-Object { $_.stale }).Count
+    $versions   = @($hostRows | Where-Object { $_.fslogixVersion } | ForEach-Object { $_.fslogixVersion } | Sort-Object -Unique)
+
+    $sumJsonFile = Join-Path $outDir ("FSLogix-PoolSummary-{0}.json" -f $sumStamp)
+    $sumHtmlFile = Join-Path $outDir ("FSLogix-PoolSummary-{0}.html" -f $sumStamp)
+
+    $sumDoc = [ordered]@{
+        kind                = 'FSLogixPoolSummary'
+        toolVersion         = $script:ToolVersion
+        schemaVersion       = $script:SchemaVersion
+        generatedUtc        = $nowUtc.ToString('o')
+        readOnly            = $true
+        folder              = $SummariseFolder
+        baselineVersion     = $MinimumFSLogixVersion
+        staleAfterDays      = $Thresholds.SummaryStaleAfterDays
+        hostCount           = $hostRows.Count
+        belowBaseline       = $belowCount
+        staleHosts          = $staleCount
+        fslogixVersions     = $versions
+        hosts               = $hostRows.ToArray()
+        configurationSpread = $spread.ToArray()
+        hostsWithoutConfiguration = $noConfigHosts
+        commonFindings      = $commonFindings
+        missingHosts        = $missingHosts.ToArray()
+        unreadableFiles     = $unreadable.ToArray()
+    }
+    try {
+        [System.IO.File]::WriteAllText($sumJsonFile, ($sumDoc | ConvertTo-Json -Depth 8))
+    } catch {
+        Write-Warning "Could not write JSON to $sumJsonFile : $($_.Exception.Message)"
+    }
+
+    if (-not $JsonOnly) {
+        $ssb = New-Object System.Text.StringBuilder
+        function Add-SumLine { param([string]$Text) [void]$ssb.AppendLine($Text) }
+
+        Add-SumLine '<!DOCTYPE html>'
+        Add-SumLine '<html lang="en"><head><meta charset="utf-8">'
+        Add-SumLine '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        Add-SumLine '<title>FSLogix Pool Summary</title>'
+        Add-SumLine '<style>'
+        Add-SumLine ':root { --ink:#1a1a1a; --muted:#5f6b7a; --line:#e3e8ee; --bg:#f4f6f8; }'
+        Add-SumLine 'body { font-family: Segoe UI, Arial, sans-serif; margin:0; padding:24px; background:var(--bg); color:var(--ink); }'
+        Add-SumLine '.wrap { max-width:1200px; margin:0 auto; }'
+        Add-SumLine 'h1 { font-size:22px; margin:0 0 4px 0; }'
+        Add-SumLine 'h2 { font-size:15px; margin:26px 0 10px 0; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }'
+        Add-SumLine '.meta { color:var(--muted); font-size:13px; margin-bottom:20px; }'
+        Add-SumLine '.chips { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:20px; }'
+        Add-SumLine '.chip { padding:8px 16px; border-radius:8px; font-weight:600; color:#fff; font-size:14px; background:#455a64; }'
+        Add-SumLine '.chip.bad { background:#c62828; } .chip.warn { background:#b8860b; } .chip.ok { background:#2e7d32; }'
+        Add-SumLine '.alert { background:#fdecea; border-left:5px solid #c62828; padding:12px 16px; border-radius:6px; margin-bottom:14px; }'
+        Add-SumLine '.note { background:#fff8e1; border-left:5px solid #b8860b; padding:12px 16px; border-radius:6px; margin-bottom:14px; }'
+        Add-SumLine 'table { border-collapse:collapse; width:100%; background:#fff; border-radius:8px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.10); }'
+        Add-SumLine 'th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; font-size:14px; }'
+        Add-SumLine 'th { background:#263238; color:#fff; font-size:12px; text-transform:uppercase; letter-spacing:.05em; }'
+        Add-SumLine '.bad { color:#c62828; font-weight:600; } .muted { color:var(--muted); font-size:12.5px; }'
+        Add-SumLine '.cid { font-family:Consolas,monospace; font-size:12px; }'
+        Add-SumLine '</style></head><body><div class="wrap">'
+
+        Add-SumLine '<h1>FSLogix Pool Summary</h1>'
+        Add-SumLine ('<div class="meta">Generated ' + (Get-Date -Format 'yyyy-MM-dd HH:mm') + ' | Folder: ' + (ConvertTo-HtmlSafe $SummariseFolder) +
+                     ' | Version baseline ' + (ConvertTo-HtmlSafe $MinimumFSLogixVersion) + ' | Tool ' + $script:ToolVersion + ' (public preview)</div>')
+
+        $belowClass = 'ok';  if ($belowCount -gt 0) { $belowClass = 'bad' }
+        $spreadClass = 'ok'; if ($spread.Count -gt 0) { $spreadClass = 'warn' }
+        $missClass = 'ok';   if ($missingHosts.Count -gt 0) { $missClass = 'bad' }
+        Add-SumLine '<div class="chips">'
+        Add-SumLine ('<span class="chip">' + $hostRows.Count + ' host(s)</span>')
+        Add-SumLine ('<span class="chip ' + $belowClass + '">' + $belowCount + ' below version baseline</span>')
+        Add-SumLine ('<span class="chip ' + $spreadClass + '">' + $spread.Count + ' setting(s) differ</span>')
+        if ($ExpectedHosts) { Add-SumLine ('<span class="chip ' + $missClass + '">' + $missingHosts.Count + ' missing</span>') }
+        if ($staleCount -gt 0) { Add-SumLine ('<span class="chip warn">' + $staleCount + ' stale</span>') }
+        Add-SumLine '</div>'
+
+        if ($missingHosts.Count -gt 0) {
+            Add-SumLine ('<div class="alert"><b>No result found for ' + $missingHosts.Count + ' expected host(s):</b> ' + (ConvertTo-HtmlSafe ($missingHosts -join ', ')) + '. These hosts are not in any figure below.</div>')
+        }
+        if ($unreadable.Count -gt 0) {
+            Add-SumLine ('<div class="note"><b>' + $unreadable.Count + ' file(s) could not be read</b> and are not in this summary:<ul>')
+            foreach ($u in $unreadable) { Add-SumLine ('<li><span class="cid">' + (ConvertTo-HtmlSafe $u.file) + '</span> - ' + (ConvertTo-HtmlSafe $u.error) + '</li>') }
+            Add-SumLine '</ul></div>'
+        }
+        $mismatchRows = @($hostRows | Where-Object { $_.fileNameMismatch })
+        if ($mismatchRows.Count -gt 0) {
+            Add-SumLine ('<div class="alert"><b>' + $mismatchRows.Count + ' result(s) name a different host than their file name.</b> Check who wrote these files before you trust them:<ul>')
+            foreach ($m in $mismatchRows) { Add-SumLine ('<li><span class="cid">' + (ConvertTo-HtmlSafe $m.file) + '</span> says host ' + (ConvertTo-HtmlSafe $m.host) + '</li>') }
+            Add-SumLine '</ul></div>'
+        }
+        if ($noConfigHosts.Count -gt 0) {
+            Add-SumLine ('<div class="note"><b>' + $noConfigHosts.Count + ' host(s) have no configuration section</b> (result written before 0.2.0), so they are not in the settings comparison: ' + (ConvertTo-HtmlSafe ($noConfigHosts -join ', ')) + '.</div>')
+        }
+
+        Add-SumLine '<h2>Hosts</h2>'
+        if ($hostRows.Count -eq 0) {
+            Add-SumLine '<table><tr><td>No FSLogix-HealthCheck-*.json results were found in this folder.</td></tr></table>'
+        } else {
+            Add-SumLine '<table><tr><th>Host</th><th>Score</th><th>FSLogix</th><th>Mode</th><th>Fail / Warn</th><th>Critical</th><th>Result age</th></tr>'
+            foreach ($r in $hostRows) {
+                $verCell = ConvertTo-HtmlSafe $r.fslogixVersion
+                if (-not $r.fslogixInstalled) { $verCell = '<span class="bad">not installed</span>' }
+                elseif ($r.belowBaseline) { $verCell = '<span class="bad">' + $verCell + '</span><div class="muted">below baseline</div>' }
+                $ageCell = [string]$r.ageDays + ' days'
+                if ($r.stale) { $ageCell = '<span class="bad">' + $ageCell + '</span><div class="muted">stale</div>' }
+                $critCell = '-'
+                if ($r.criticalFails.Count -gt 0) { $critCell = '<span class="bad cid">' + (ConvertTo-HtmlSafe ($r.criticalFails -join ', ')) + '</span>' }
+                Add-SumLine ('<tr><td>' + (ConvertTo-HtmlSafe $r.host) + '<div class="muted">' + (ConvertTo-HtmlSafe $r.storageRoot) + '</div></td>' +
+                             '<td>' + (ConvertTo-HtmlSafe ([string]$r.healthScore)) + '<div class="muted">' + (ConvertTo-HtmlSafe $r.grade) + '</div></td>' +
+                             '<td>' + $verCell + '</td><td>' + (ConvertTo-HtmlSafe $r.mode) + '</td>' +
+                             '<td>' + (ConvertTo-HtmlSafe ([string]$r.fail)) + ' / ' + (ConvertTo-HtmlSafe ([string]$r.warn)) + '</td><td>' + $critCell + '</td><td>' + $ageCell + '</td></tr>')
+            }
+            Add-SumLine '</table>'
+        }
+
+        Add-SumLine '<h2>Settings that differ between hosts</h2>'
+        if ($configHosts.Count -lt 2) {
+            Add-SumLine '<table><tr><td>Fewer than two hosts have a configuration section, so there is nothing to compare.</td></tr></table>'
+        } elseif ($spread.Count -eq 0) {
+            Add-SumLine ('<table><tr><td>All ' + $configHosts.Count + ' hosts with a configuration section have the same FSLogix registry settings.</td></tr></table>')
+        } else {
+            Add-SumLine '<table><tr><th style="width:280px">Setting</th><th>Value and hosts</th></tr>'
+            foreach ($s in $spread) {
+                Add-SumLine ('<tr><td class="cid">' + (ConvertTo-HtmlSafe $s.setting) + '</td><td>')
+                foreach ($v in $s.values) {
+                    Add-SumLine ('<div><b class="cid">' + (ConvertTo-HtmlSafe $v.value) + '</b> <span class="muted">(' + $v.hostCount + '): ' + (ConvertTo-HtmlSafe ($v.hosts -join ', ')) + '</span></div>')
+                }
+                Add-SumLine '</td></tr>'
+            }
+            Add-SumLine '</table>'
+        }
+
+        Add-SumLine '<h2>Findings across the pool</h2>'
+        if ($commonFindings.Count -eq 0) {
+            Add-SumLine '<table><tr><td>No check failed or warned on any host.</td></tr></table>'
+        } else {
+            Add-SumLine '<table><tr><th>Check</th><th>Severity</th><th>Fail hosts</th><th>Warn hosts</th></tr>'
+            foreach ($c in $commonFindings) {
+                Add-SumLine ('<tr><td>' + (ConvertTo-HtmlSafe $c.name) + '<div class="cid muted">' + (ConvertTo-HtmlSafe $c.id) + '</div></td><td>' + (ConvertTo-HtmlSafe $c.severity) +
+                             '</td><td>' + $c.failHosts + '</td><td>' + $c.warnHosts + '</td></tr>')
+            }
+            Add-SumLine '</table>'
+        }
+
+        Add-SumLine '<h2>About this summary</h2>'
+        Add-SumLine '<table><tr><td>This page is built only from the JSON results in the folder. It uses the newest result for each host and ignores older ones. It ran no checks and changed nothing. '
+        Add-SumLine 'A setting shown as (not set) is not in the registry on that host, so FSLogix uses its default there. That can be the same as an explicit value on another host. '
+        Add-SumLine 'Each host result is one moment in time. Check the result age before you act on a figure. '
+        Add-SumLine 'The results are only as trustworthy as the folder: anyone who can write to it can write a result. Give write access to the session hosts and admins only.</td></tr></table>'
+        Add-SumLine '</div></body></html>'
+
+        try {
+            [System.IO.File]::WriteAllText($sumHtmlFile, $ssb.ToString())
+        } catch {
+            Write-Warning "Could not write HTML to $sumHtmlFile : $($_.Exception.Message)"
+        }
+    }
+
+    $sumOut = $sumJsonFile
+    if (-not $JsonOnly) { $sumOut = $sumHtmlFile }
+    Write-Output ("FSLogix Pool Summary {0} | {1} host(s) | {2} below baseline | {3} setting(s) differ | {4} missing | {5} unreadable | {6}" -f `
+        $script:ToolVersion, $hostRows.Count, $belowCount, $spread.Count, $missingHosts.Count, $unreadable.Count, $sumOut)
+    return
 }
 
 # ---------------------------------------------------------------------------
@@ -565,13 +1002,27 @@ Invoke-Check -Id 'HOST-SYSFREE' -Category 'Host' -Name 'System drive free space'
 # 1. Installation
 # ---------------------------------------------------------------------------
 
-$fslogixInstalled = Test-Path $RK_APPS
-$fslogixVersion   = 'unknown'
+# The Apps key alone does not prove an install: Group Policy writes FSLogix
+# settings such as Apps\CleanupInvalidSessions whether or not the product is
+# there. Found on a lab host with GPO settings and no frxsvc (17 Nov 2026).
+# Installed means the installer's InstallVersion value or the frxsvc service.
+$installVersionRaw = Get-RegValue -Path $RK_APPS -Name 'InstallVersion' -Default $null
+$frxsvcPresent     = $null -ne (Get-Service -Name 'frxsvc' -ErrorAction SilentlyContinue)
+$fslogixInstalled  = ($null -ne $installVersionRaw) -or $frxsvcPresent
+$fslogixVersion    = 'unknown'
+$settingsPresent   = (Test-Path $RK_APPS) -or (Test-Path $RK_PROFILES) -or (Test-Path $RK_ODFC)
 
 if (-not $fslogixInstalled) {
-    Add-Check -Id 'INST-PRESENT' -Category 'Install' -Name 'FSLogix installed' -Status 'FAIL' -Severity 'Critical' `
-        -Detail "No FSLogix installation found at $RK_APPS. Every other check is skipped." `
-        -Recommendation 'Install FSLogix from https://aka.ms/fslogix-latest.' -Reference $DOC_RELEASE
+    if ($settingsPresent) {
+        Add-Check -Id 'INST-PRESENT' -Category 'Install' -Name 'FSLogix installed' -Status 'FAIL' -Severity 'Critical' `
+            -Detail 'FSLogix settings are present on this host, but FSLogix is not installed: there is no InstallVersion value and no frxsvc service. The settings usually come from Group Policy or the image. Users on this host get a local profile, not a profile container. Every other check is skipped.' `
+            -Evidence "Settings found under $RK_APPS, $RK_PROFILES or $RK_ODFC. InstallVersion: not set. frxsvc: not present." `
+            -Recommendation 'Install FSLogix from https://aka.ms/fslogix-latest, or remove this host from the scope of the FSLogix policy.' -Reference $DOC_RELEASE
+    } else {
+        Add-Check -Id 'INST-PRESENT' -Category 'Install' -Name 'FSLogix installed' -Status 'FAIL' -Severity 'Critical' `
+            -Detail "No FSLogix installation found: no InstallVersion at $RK_APPS and no frxsvc service. Every other check is skipped." `
+            -Recommendation 'Install FSLogix from https://aka.ms/fslogix-latest.' -Reference $DOC_RELEASE
+    }
 } else {
     $fslogixVersion = ConvertTo-FlatString (Get-RegValue -Path $RK_APPS -Name 'InstallVersion' -Default 'unknown')
     $installPath    = ConvertTo-FlatString (Get-RegValue -Path $RK_APPS -Name 'InstallPath' -Default '')
@@ -635,7 +1086,7 @@ if ($fslogixInstalled) {
         if ($vhdLocations -and $ccdLocations) {
             Add-Check -Id 'CFG-STORAGEMODE' -Category 'Configuration' -Name 'Storage location mode' -Status 'FAIL' -Severity 'Critical' `
                 -Detail 'Both VHDLocations and CCDLocations are set. Microsoft states these must not both be present. FSLogix behaviour is undefined.' `
-                -Evidence "VHDLocations: $vhdLocations | CCDLocations: $ccdLocations" `
+                -Evidence ("VHDLocations: $vhdLocations | CCDLocations: " + (Protect-SecretText $ccdLocations)) `
                 -Recommendation 'Remove whichever value does not match the intended mode.' -Reference $DOC_SETTINGS
         } elseif (-not $vhdLocations -and -not $ccdLocations) {
             Add-Check -Id 'CFG-STORAGEMODE' -Category 'Configuration' -Name 'Storage location mode' -Status 'FAIL' -Severity 'Critical' `
@@ -650,7 +1101,7 @@ if ($fslogixInstalled) {
                 $msg = "Cloud Cache mode with only $providerCount storage provider. Cloud Cache exists to replicate across providers; a single provider adds the local-cache complexity without the resilience it is there to buy."
             }
             Add-Check -Id 'CFG-STORAGEMODE' -Category 'Configuration' -Name 'Storage location mode' -Status $sev -Severity 'High' `
-                -Detail $msg -Evidence "CCDLocations: $ccdLocations" -Reference $DOC_EXAMPLES
+                -Detail $msg -Evidence ("CCDLocations: " + (Protect-SecretText $ccdLocations)) -Reference $DOC_EXAMPLES
         } else {
             $pathCount = @($vhdLocations -split ';' | Where-Object { $_ }).Count
             if ($pathCount -gt 1) {
@@ -1581,6 +2032,66 @@ if ($fslogixInstalled) {
 }
 
 # ---------------------------------------------------------------------------
+# Configuration snapshot and drift from a reference host (-BaselinePath)
+#
+# The snapshot is written to the JSON on every run, so any result can later
+# serve as a baseline or be compared in -SummariseFolder mode. The drift row
+# has severity Info: it never changes the health score, so a score stays
+# comparable whether or not a baseline was given.
+# ---------------------------------------------------------------------------
+
+$configSnapshot = [ordered]@{}
+try { $configSnapshot = Get-ConfigSnapshot } catch { $configSnapshot = [ordered]@{} }
+$driftBlock = $null
+
+if ($BaselinePath) {
+    Invoke-Check -Id 'DRIFT-CONFIG' -Category 'Drift' -Name 'Configuration drift from baseline' -Body {
+        if (-not (Test-Path -LiteralPath $BaselinePath -PathType Leaf)) {
+            Add-Check -Id 'DRIFT-CONFIG' -Category 'Drift' -Name 'Configuration drift from baseline' -Status 'INFO' -Severity 'Info' `
+                -Detail "Baseline file not found: $BaselinePath. Drift was not checked."
+            return
+        }
+        $base = Read-ResultJson -Path $BaselinePath
+        if ($null -eq $base -or $null -eq $base.PSObject.Properties['configuration']) {
+            Add-Check -Id 'DRIFT-CONFIG' -Category 'Drift' -Name 'Configuration drift from baseline' -Status 'INFO' -Severity 'Info' `
+                -Detail "The baseline file has no configuration section, so drift was not checked. It was written by version $($base.toolVersion), before drift support." `
+                -Recommendation 'Run version 0.2.0 or later on the reference host and use that JSON file as the baseline.'
+            return
+        }
+
+        $baseHost = [string]$base.host.computerName
+        $baseWhen = [string]$base.generatedUtc
+        $refTable = ConvertTo-ConfigTable $base.configuration
+        $curTable = @{}
+        foreach ($k in $configSnapshot.Keys) { $curTable[$k] = [string]$configSnapshot[$k] }
+        $diffs = @(Compare-ConfigTable -Reference $refTable -Current $curTable)
+
+        $script:driftBlock = [ordered]@{
+            baselineFile         = $BaselinePath
+            baselineHost         = $baseHost
+            baselineGeneratedUtc = $baseWhen
+            settingsCompared     = @(@($refTable.Keys) + @($curTable.Keys) | Sort-Object -Unique).Count
+            differences          = $diffs
+        }
+
+        if ($diffs.Count -eq 0) {
+            Add-Check -Id 'DRIFT-CONFIG' -Category 'Drift' -Name 'Configuration drift from baseline' -Status 'PASS' -Severity 'Info' `
+                -Detail "The FSLogix registry configuration matches the baseline from $baseHost." `
+                -Evidence "Baseline: $BaselinePath (captured $baseWhen)"
+            return
+        }
+
+        $shown = @($diffs | Select-Object -First 15 | ForEach-Object { '{0}: baseline {1}, this host {2}' -f $_.setting, $_.baseline, $_.current })
+        $more = ''
+        if ($diffs.Count -gt 15) { $more = " ... and $($diffs.Count - 15) more in the JSON drift block." }
+        Add-Check -Id 'DRIFT-CONFIG' -Category 'Drift' -Name 'Configuration drift from baseline' -Status 'WARN' -Severity 'Info' `
+            -Detail "$($diffs.Count) FSLogix setting(s) differ from the baseline from $baseHost (captured $baseWhen). (not set) means FSLogix uses its default on that side." `
+            -Evidence (($shown -join ' | ') + $more) `
+            -Recommendation 'Review each difference. Some can be intended, for example on a pilot host. Correct the source of the configuration (GPO, Intune or the image), not only this host.'
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Score and summary
 # ---------------------------------------------------------------------------
 
@@ -1698,6 +2209,10 @@ $document = [ordered]@{
     fslogix       = $fslogixBlock
     summary       = $summaryBlock
     checks        = $checkArray.ToArray()
+    # Schema 1.1. Every FSLogix registry value as "Key\ValueName" = string.
+    configuration = $configSnapshot
+    # Schema 1.1. Null unless -BaselinePath was given.
+    drift         = $driftBlock
 }
 
 try {
@@ -1791,7 +2306,7 @@ if (-not $JsonOnly) {
         Add-Line '</ul></div>'
     }
 
-    $order = @('Install', 'Configuration', 'Cloud Cache', 'Antivirus', 'Storage', 'Services', 'Groups', 'Runtime', 'Host')
+    $order = @('Install', 'Configuration', 'Drift', 'Cloud Cache', 'Antivirus', 'Storage', 'Services', 'Groups', 'Runtime', 'Host')
     $categories = @($script:Results | Select-Object -ExpandProperty Category -Unique |
                     Sort-Object { $i = $order.IndexOf($_); if ($i -lt 0) { 99 } else { $i } })
 
@@ -1818,7 +2333,7 @@ if (-not $JsonOnly) {
     Add-Line 'Every rule is drawn from current Microsoft Learn FSLogix documentation: the Prerequisites page for antivirus exclusions, the Configuration Setting Reference for defaults, the Configuration examples page for recommended values, and the Codes page for Status and Reason decoding. '
     Add-Line 'The health score weights each finding by severity: a pass earns full weight, a warning half, a failure none. Informational rows are excluded from the score. '
     Add-Line 'A pass on this host does not prove the storage back end is correct: share-side antivirus exclusions, share and NTFS permissions for real user accounts, and storage performance are outside what a session host can observe. '
-    Add-Line 'This report covers ONE host at one moment. It is strictly read-only and changed nothing. Estate-wide comparison, and checking whether the FSLogix configuration intended by a management platform actually reached the host, are beyond what a single-host script can do.'
+    Add-Line 'This report covers ONE host at one moment. It is strictly read-only and changed nothing. To compare this host with a known-good host, run with -BaselinePath. To compare a whole host pool, collect the JSON results in one folder and run with -SummariseFolder.'
     Add-Line '</td></tr></table>'
 
     Add-Line '</div></body></html>'

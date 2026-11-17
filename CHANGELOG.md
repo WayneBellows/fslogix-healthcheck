@@ -10,6 +10,48 @@ under **Schema**.
 
 ---
 
+## [0.2.0] — 2026-11-17
+
+**Schema:** `1.1` — additive. Two new top-level fields, `configuration` and `drift`. No
+existing field changed, so a 1.0 consumer keeps working.
+
+### Added
+
+- `-BaselinePath`: compares this host's FSLogix registry configuration against a JSON
+  result from a reference host and adds a `DRIFT-CONFIG` row. Order inside `VHDLocations`
+  and `CCDLocations` is significant; comparison is otherwise case-insensitive. The row has
+  severity Info, so it never moves the health score.
+- `configuration` in the JSON: every value under the FSLogix `Profiles`, `ODFC` and `Apps`
+  keys as `"Key\\ValueName": "string"`, so any result can later be a baseline.
+- `-SummariseFolder` (with optional `-ExpectedHosts`): a pool summary built from a folder
+  of JSON results. Newest result per host; version below baseline; stale results; settings
+  that differ between hosts; findings across the pool; missing hosts; unreadable files.
+  Runs no host checks.
+
+### Security
+
+- Storage account keys and SAS signatures (`AccountKey=`, `SharedAccessSignature=`,
+  `sig=`) in Cloud Cache connection strings are replaced by a short SHA-256 fingerprint in
+  the `configuration` section and in the `CCDLocations` evidence. The JSON and HTML never
+  hold the secret; drift can still tell that two hosts use different keys. The evidence
+  redaction also fixes 0.1.0, which printed `CCDLocations` as it was.
+- The pool summary treats result files as untrusted input: every value is HTML-escaped, a
+  `generatedUtc` later than the file's own write time is capped to that time, and a result
+  whose host differs from its file name is flagged at the top of the page.
+
+### Fixed
+
+- **A false PASS on `INST-PRESENT`.** The install check only tested that the `Apps`
+  registry key existed. Group Policy writes FSLogix settings to that key whether or not the
+  product is installed, so a host with the policy but without FSLogix passed as installed.
+  Installed now means the `InstallVersion` value or the `frxsvc` service exists. Settings
+  without the product get their own Critical finding. Found on a lab session host.
+
+### Changed
+
+- `-MinimumFSLogixVersion` default raised to 3.26.826.17182 (FSLogix 26.08, published
+  31 August 2026). Hosts on 26.01 CU1 now get a version warning.
+
 ## [0.1.0] — 2026-09-02
 
 First public release. Public preview: tested on a real AVD session host across several
@@ -97,4 +139,5 @@ commented in the source so they are not reintroduced:
 Here-strings are also avoided throughout, because some scripted-action delivery wrappers
 re-serialise them and break the script.
 
+[0.2.0]: https://github.com/WayneBellows/fslogix-healthcheck/releases/tag/v0.2.0
 [0.1.0]: https://github.com/WayneBellows/fslogix-healthcheck/releases/tag/v0.1.0

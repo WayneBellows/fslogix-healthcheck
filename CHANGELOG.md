@@ -39,6 +39,14 @@ existing field changed, so a 1.0 consumer keeps working.
   `generatedUtc` later than the file's own write time is capped to that time, and a result
   whose host differs from its file name is flagged at the top of the page.
 
+### Fixed
+
+- **A false PASS on `INST-PRESENT`.** The install check only tested that the `Apps`
+  registry key existed. Group Policy writes FSLogix settings to that key whether or not the
+  product is installed, so a host with the policy but without FSLogix passed as installed.
+  Installed now means the `InstallVersion` value or the `frxsvc` service exists. Settings
+  without the product get their own Critical finding. Found on a lab session host.
+
 ### Changed
 
 - `-MinimumFSLogixVersion` default raised to 3.26.826.17182 (FSLogix 26.08, published

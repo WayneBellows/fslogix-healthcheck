@@ -998,13 +998,27 @@ Invoke-Check -Id 'HOST-SYSFREE' -Category 'Host' -Name 'System drive free space'
 # 1. Installation
 # ---------------------------------------------------------------------------
 
-$fslogixInstalled = Test-Path $RK_APPS
-$fslogixVersion   = 'unknown'
+# The Apps key alone does not prove an install: Group Policy writes FSLogix
+# settings such as Apps\CleanupInvalidSessions whether or not the product is
+# there. Found on a lab host with GPO settings and no frxsvc (17 Nov 2026).
+# Installed means the installer's InstallVersion value or the frxsvc service.
+$installVersionRaw = Get-RegValue -Path $RK_APPS -Name 'InstallVersion' -Default $null
+$frxsvcPresent     = $null -ne (Get-Service -Name 'frxsvc' -ErrorAction SilentlyContinue)
+$fslogixInstalled  = ($null -ne $installVersionRaw) -or $frxsvcPresent
+$fslogixVersion    = 'unknown'
+$settingsPresent   = (Test-Path $RK_APPS) -or (Test-Path $RK_PROFILES) -or (Test-Path $RK_ODFC)
 
 if (-not $fslogixInstalled) {
-    Add-Check -Id 'INST-PRESENT' -Category 'Install' -Name 'FSLogix installed' -Status 'FAIL' -Severity 'Critical' `
-        -Detail "No FSLogix installation found at $RK_APPS. Every other check is skipped." `
-        -Recommendation 'Install FSLogix from https://aka.ms/fslogix-latest.' -Reference $DOC_RELEASE
+    if ($settingsPresent) {
+        Add-Check -Id 'INST-PRESENT' -Category 'Install' -Name 'FSLogix installed' -Status 'FAIL' -Severity 'Critical' `
+            -Detail 'FSLogix settings are present on this host, but FSLogix is not installed: there is no InstallVersion value and no frxsvc service. The settings usually come from Group Policy or the image. Users on this host get a local profile, not a profile container. Every other check is skipped.' `
+            -Evidence "Settings found under $RK_APPS, $RK_PROFILES or $RK_ODFC. InstallVersion: not set. frxsvc: not present." `
+            -Recommendation 'Install FSLogix from https://aka.ms/fslogix-latest, or remove this host from the scope of the FSLogix policy.' -Reference $DOC_RELEASE
+    } else {
+        Add-Check -Id 'INST-PRESENT' -Category 'Install' -Name 'FSLogix installed' -Status 'FAIL' -Severity 'Critical' `
+            -Detail "No FSLogix installation found: no InstallVersion at $RK_APPS and no frxsvc service. Every other check is skipped." `
+            -Recommendation 'Install FSLogix from https://aka.ms/fslogix-latest.' -Reference $DOC_RELEASE
+    }
 } else {
     $fslogixVersion = ConvertTo-FlatString (Get-RegValue -Path $RK_APPS -Name 'InstallVersion' -Default 'unknown')
     $installPath    = ConvertTo-FlatString (Get-RegValue -Path $RK_APPS -Name 'InstallPath' -Default '')

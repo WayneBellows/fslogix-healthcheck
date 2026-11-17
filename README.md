@@ -1,6 +1,6 @@
 # FSLogix Health Check
 
-> **Public preview — 0.1.0.** Tested on a real AVD session host across several
+> **Public preview — 0.2.0.** Tested on a real AVD session host across several
 > configurations, but **not yet across a range of customer environments**. Treat findings
 > as advice to verify, not instructions to apply. The JSON schema may change before 1.0.
 > See [Road to 1.0](#road-to-10).
@@ -120,6 +120,37 @@ Include the container size scan, which walks the share and is off by default:
 .\FSLogix-HealthCheck.ps1 -ScanContainers -MaxContainersToScan 1000
 ```
 
+### Drift from a known-good host
+
+Every result (0.2.0 and later) records the host's FSLogix registry configuration in the
+JSON. Run once on a host you trust, then point other hosts at that file:
+
+```powershell
+.\FSLogix-HealthCheck.ps1 -BaselinePath \\fileserver\fslogix-health\FSLogix-HealthCheck-GOLD01-20261117-090000.json
+```
+
+This adds one `DRIFT-CONFIG` row listing every setting under `Profiles`, `ODFC` and `Apps`
+that differs from the reference host. The order of `VHDLocations` and `CCDLocations`
+counts, because it changes behaviour. Comparison is case-insensitive. A value present on one
+side only is a difference: on the other side FSLogix uses its default. The row has severity
+Info, so it **never changes the health score** — a score stays comparable with and without
+a baseline.
+
+### Host pool summary
+
+Collect the JSON results from a pool in one folder (the `-ReportPath` share), then run:
+
+```powershell
+.\FSLogix-HealthCheck.ps1 -SummariseFolder \\fileserver\fslogix-health -ExpectedHosts AVD-0,AVD-1,AVD-2
+```
+
+This runs **no host checks**. It takes the newest result per host and writes one
+`FSLogix-PoolSummary-<time>.html` and `.json` showing: each host's score, FSLogix version
+(flagged below the baseline) and result age (flagged after 7 days); every setting whose
+value is not the same on all hosts, with which hosts hold which value; the checks that fail
+or warn across the pool; hosts in `-ExpectedHosts` with no result; and files that could
+not be read. It can run on any machine that can read the share — FSLogix is not needed.
+
 ### Parameters
 
 | Parameter | Purpose |
@@ -131,6 +162,9 @@ Include the container size scan, which walks the share and is off by default:
 | `-MaxContainersToScan` | Cap on that enumeration. Reported in the finding, never applied silently. |
 | `-ShareScanDepth` | Directory levels to descend on the share. Default 2, which reaches every container in the standard layout. |
 | `-MinimumFSLogixVersion` | Version baseline for the agent-version check. |
+| `-BaselinePath` | JSON result from a reference host. Adds the `DRIFT-CONFIG` check. |
+| `-SummariseFolder` | Folder of JSON results. Writes a pool summary and runs no host checks. |
+| `-ExpectedHosts` | With `-SummariseFolder`: hosts that should have a result. Array or comma-separated string. |
 | `-Quiet` | Suppress the console table. |
 
 ### Requirements
@@ -181,8 +215,8 @@ single value.
 The JSON document is the source of truth. HTML is a rendering of it.
 
 ```
-toolVersion     e.g. "0.1.0"
-schemaVersion   "1.0"
+toolVersion     e.g. "0.2.0"
+schemaVersion   "1.1"
 generatedUtc    ISO 8601
 durationMs      int
 readOnly        always true
@@ -194,7 +228,14 @@ summary         { healthScore, grade, pass, warn, fail, info, criticalFails[] }
 checks[]        { id, category, name, status, severity, weight, detail,
                   evidence, recommendation, reference,
                   remediationAvailable, remediation }
+configuration   { "Profiles\\VolumeType": "VHDX", ... }   (1.1) every value under
+                the FSLogix Profiles, ODFC and Apps keys, as strings
+drift           null, or { baselineFile, baselineHost, baselineGeneratedUtc,
+                settingsCompared, differences[] { setting, baseline, current } }  (1.1)
 ```
+
+The pool summary JSON has `kind: "FSLogixPoolSummary"` and its own shape: `hosts[]`,
+`configurationSpread[]`, `commonFindings[]`, `missingHosts[]`, `unreadableFiles[]`.
 
 `id` is stable across runs and versions. It is the key to join findings across a host
 pool or trend a single rule over time. `toolVersion` and `schemaVersion` are versioned
@@ -269,11 +310,14 @@ issue with the JSON, minus anything you would rather not share.
   scheduled task or a scripted action, the share write test reflects the machine account.
   The finding states this.
 - **The version baseline is a parameter, not a live lookup.** The script never claims to
-  know the current release. `-MinimumFSLogixVersion` defaults to 3.26.126.19110
-  (FSLogix 26.01 CU1, 10 February 2026) and needs updating as Microsoft ships.
-- **One host, one moment.** Estate-wide comparison, and checking whether the
-  configuration intended by a management platform actually reached the host, are beyond
-  what a single-host script can do.
+  know the current release. `-MinimumFSLogixVersion` defaults to 3.26.826.17182
+  (FSLogix 26.08, 31 August 2026) and needs updating as Microsoft ships.
+- **Drift is only as good as the reference.** `-BaselinePath` compares against one host
+  you chose, not against what a management platform intended. If the reference host is
+  wrong, every other host shows as drift. `ObjectSpecific` per-SID overrides are not
+  compared yet.
+- **The pool summary is only as fresh as its files.** Each result is one host at one
+  moment. Check the result age column before acting on a figure.
 
 ---
 
@@ -287,7 +331,7 @@ runs the same way as a plain `.ps1` anywhere else.
 It writes a single summary line to standard output for the calling automation to capture:
 
 ```
-FSLogix Health Check 0.1.0 | HOST01 | Score 73.6/100 (Needs attention) | 24 pass, 12 warn, 4 fail, 7 info | Critical: AV-EXCLUSIONS | JSON: \\fileserver\fslogix-health\FSLogix-HealthCheck-HOST01-20260902-140233.json
+FSLogix Health Check 0.2.0 | HOST01 | Score 73.6/100 (Needs attention) | 24 pass, 12 warn, 4 fail, 7 info | Critical: AV-EXCLUSIONS | JSON: \\fileserver\fslogix-health\FSLogix-HealthCheck-HOST01-20260902-140233.json
 ```
 
 ---

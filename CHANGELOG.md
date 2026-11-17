@@ -10,6 +10,29 @@ under **Schema**.
 
 ---
 
+## [0.2.0] — 2026-11-17
+
+**Schema:** `1.1` — additive. Two new top-level fields, `configuration` and `drift`. No
+existing field changed, so a 1.0 consumer keeps working.
+
+### Added
+
+- `-BaselinePath`: compares this host's FSLogix registry configuration against a JSON
+  result from a reference host and adds a `DRIFT-CONFIG` row. Order inside `VHDLocations`
+  and `CCDLocations` is significant; comparison is otherwise case-insensitive. The row has
+  severity Info, so it never moves the health score.
+- `configuration` in the JSON: every value under the FSLogix `Profiles`, `ODFC` and `Apps`
+  keys as `"Key\\ValueName": "string"`, so any result can later be a baseline.
+- `-SummariseFolder` (with optional `-ExpectedHosts`): a pool summary built from a folder
+  of JSON results. Newest result per host; version below baseline; stale results; settings
+  that differ between hosts; findings across the pool; missing hosts; unreadable files.
+  Runs no host checks.
+
+### Changed
+
+- `-MinimumFSLogixVersion` default raised to 3.26.826.17182 (FSLogix 26.08, published
+  31 August 2026). Hosts on 26.01 CU1 now get a version warning.
+
 ## [0.1.0] — 2026-09-02
 
 First public release. Public preview: tested on a real AVD session host across several
@@ -97,4 +120,5 @@ commented in the source so they are not reintroduced:
 Here-strings are also avoided throughout, because some scripted-action delivery wrappers
 re-serialise them and break the script.
 
+[0.2.0]: https://github.com/WayneBellows/fslogix-healthcheck/releases/tag/v0.2.0
 [0.1.0]: https://github.com/WayneBellows/fslogix-healthcheck/releases/tag/v0.1.0
